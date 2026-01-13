@@ -3,8 +3,6 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::vec;
 
 #[cfg(feature = "use-geo_0_31")]
-use geo_0_31::algorithm::BoundingRect;
-#[cfg(feature = "use-geo_0_31")]
 use geo_0_31::Geometry;
 use geo_traits::{CoordTrait, RectTrait};
 
@@ -232,10 +230,14 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
         distance_metric: &M,
     ) -> Vec<u32> {
         let boxes = self.boxes();
+        if boxes.is_empty() {
+            return vec![];
+        }
+
         let indices = self.indices();
         let max_distance = max_distance.unwrap_or(distance_metric.max_distance());
 
-        let mut outer_node_index = Some(boxes.len() - 4);
+        let mut outer_node_index = boxes.len().checked_sub(4);
         let mut queue = BinaryHeap::new();
         let mut results: Vec<u32> = vec![];
 
@@ -403,26 +405,14 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
         accessor: &A,
     ) -> Vec<u32> {
         let boxes = self.boxes();
+        if boxes.is_empty() {
+            return vec![];
+        }
+
         let indices = self.indices();
         let max_distance = max_distance.unwrap_or(distance_metric.max_distance());
 
-        // Get the bounding box of the query geometry
-        let bounds = query_geometry.bounding_rect();
-        let (query_min_x, query_min_y, query_max_x, query_max_y) = if let Some(rect) = bounds {
-            let min = rect.min();
-            let max = rect.max();
-            (
-                N::from_f64(min.x).unwrap_or(N::zero()),
-                N::from_f64(min.y).unwrap_or(N::zero()),
-                N::from_f64(max.x).unwrap_or(N::zero()),
-                N::from_f64(max.y).unwrap_or(N::zero()),
-            )
-        } else {
-            // If no bounding box, use origin
-            (N::zero(), N::zero(), N::zero(), N::zero())
-        };
-
-        let mut outer_node_index = Some(boxes.len() - 4);
+        let mut outer_node_index = boxes.len().checked_sub(4);
         let mut queue = BinaryHeap::new();
         let mut results: Vec<u32> = vec![];
 
@@ -436,13 +426,9 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
                 let index = indices.get(pos >> 2);
 
                 let dist = if node_index >= self.num_items() as usize * 4 {
-                    // For internal nodes, use bbox-to-bbox distance as approximation
-                    let center_x = (query_min_x + query_max_x) / (N::one() + N::one());
-                    let center_y = (query_min_y + query_max_y) / (N::one() + N::one());
-
-                    distance_metric.distance_to_bbox(
-                        center_x,
-                        center_y,
+                    // For internal nodes, use geometry-to-bbox distance
+                    distance_metric.distance_geometry_to_bbox(
+                        query_geometry,
                         boxes[pos],
                         boxes[pos + 1],
                         boxes[pos + 2],
@@ -609,7 +595,6 @@ mod test {
             assert_eq!(results, expected);
         }
     }
-
     #[cfg(feature = "use-geo_0_31")]
     mod distance_metrics {
         use crate::rtree::distance::{EuclideanDistance, HaversineDistance};
