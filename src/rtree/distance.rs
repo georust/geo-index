@@ -42,19 +42,28 @@ pub trait DistanceMetric<N: IndexableNum>: SimpleDistanceMetric<N> {
     ) -> N {
         // Fast path for points: use distance_to_bbox directly
         if let Geometry::Point(p) = geom {
-            let x = N::from_f64(p.x()).unwrap_or(N::zero());
-            let y = N::from_f64(p.y()).unwrap_or(N::zero());
+            let (Some(x), Some(y)) = (N::from_f64(p.x()), N::from_f64(p.y())) else {
+                return self.max_distance();
+            };
             self.distance_to_bbox(x, y, min_x, min_y, max_x, max_y)
         } else {
             // General case: wrap bbox as Rect and use distance_to_geometry
+            let (Some(min_x), Some(min_y), Some(max_x), Some(max_y)) = (
+                min_x.to_f64(),
+                min_y.to_f64(),
+                max_x.to_f64(),
+                max_y.to_f64(),
+            ) else {
+                return self.max_distance();
+            };
             let bbox = Rect::new(
                 coord! {
-                    x: min_x.to_f64().unwrap_or(0.0),
-                    y: min_y.to_f64().unwrap_or(0.0)
+                    x: min_x,
+                    y: min_y
                 },
                 coord! {
-                    x: max_x.to_f64().unwrap_or(0.0),
-                    y: max_y.to_f64().unwrap_or(0.0)
+                    x: max_x,
+                    y: max_y
                 },
             );
             self.distance_to_geometry(geom, &Geometry::Rect(bbox))
