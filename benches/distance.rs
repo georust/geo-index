@@ -118,6 +118,7 @@ fn benchmark_distance_metrics(c: &mut Criterion) {
                     query_point.y(),
                     Some(10),
                     None,
+                    false,
                     &euclidean,
                 )
             })
@@ -130,6 +131,7 @@ fn benchmark_distance_metrics(c: &mut Criterion) {
                     query_point.y(),
                     Some(10),
                     None,
+                    false,
                     &haversine,
                 )
             })
@@ -144,7 +146,9 @@ fn benchmark_distance_metrics(c: &mut Criterion) {
         geom_group.bench_with_input(BenchmarkId::new("euclidean", size), &size, |b, _| {
             let metric = SimpleMetric;
             let accessor = SliceGeometryAccessor::new(&geometries);
-            b.iter(|| tree.neighbors_geometry(&query_geometry, Some(10), None, &metric, &accessor))
+            b.iter(|| {
+                tree.neighbors_geometry(&query_geometry, Some(10), None, false, &metric, &accessor)
+            })
         });
 
         geom_group.finish();
@@ -211,6 +215,7 @@ fn benchmark_comparison_with_baseline(c: &mut Criterion) {
                 query_point.y(),
                 Some(10),
                 None,
+                false,
                 &euclidean,
             )
         })

@@ -137,19 +137,17 @@ fn verify_neighbors_geometry(
     let metric = EuclideanDistance;
     let accessor = SliceGeometryAccessor::new(indexed_geometries);
 
-    // Get results from neighbors_geometry
-    let rtree_results = tree.neighbors_geometry(query_geometry, Some(k), None, &metric, &accessor);
+    // Get results from neighbors_geometry - now returns Vec<(u32, f64)>
+    let rtree_results =
+        tree.neighbors_geometry(query_geometry, Some(k), None, false, &metric, &accessor);
 
     // Get ground truth
     let ground_truth = compute_knn_ground_truth(query_geometry, indexed_geometries, k);
 
-    // Compute distances for rtree results
+    // Compute distances for rtree results - distances are already included!
     let rtree_with_distances: Vec<(usize, f64)> = rtree_results
         .iter()
-        .map(|&idx| {
-            let dist = Euclidean.distance(query_geometry, &indexed_geometries[idx as usize]);
-            (idx as usize, dist)
-        })
+        .map(|&(idx, dist)| (idx as usize, dist))
         .collect();
 
     // Check that results are in non-decreasing distance order
@@ -193,8 +191,10 @@ fn verify_neighbors_geometry(
 
     // Verify that all returned items are among the true K nearest neighbors
     // (allowing for ties at the boundary)
-    let rtree_indices: std::collections::HashSet<usize> =
-        rtree_results.iter().map(|&idx| idx as usize).collect();
+    let rtree_indices: std::collections::HashSet<usize> = rtree_results
+        .iter()
+        .map(|&(idx, _dist)| idx as usize)
+        .collect();
 
     // Check that all rtree results have distances <= K-th distance
     for (idx, dist) in &rtree_with_distances {
@@ -360,14 +360,18 @@ fn test_neighbors_geometry_k_larger_than_dataset() {
     let accessor = SliceGeometryAccessor::new(&indexed_geometries);
 
     // Request 10 neighbors but only 5 are available
-    let rtree_results = tree.neighbors_geometry(&query_geom, Some(10), None, &metric, &accessor);
+    let rtree_results =
+        tree.neighbors_geometry(&query_geom, Some(10), None, false, &metric, &accessor);
     let ground_truth = compute_knn_ground_truth(&query_geom, &indexed_geometries, 10);
 
     assert_eq!(rtree_results.len(), 5);
     assert_eq!(rtree_results.len(), ground_truth.len());
 
     let ground_truth_indices: Vec<usize> = ground_truth.iter().map(|(idx, _)| *idx).collect();
-    let rtree_indices: Vec<usize> = rtree_results.iter().map(|&idx| idx as usize).collect();
+    let rtree_indices: Vec<usize> = rtree_results
+        .iter()
+        .map(|&(idx, _dist)| idx as usize)
+        .collect();
     assert_eq!(rtree_indices, ground_truth_indices);
 }
 
@@ -385,11 +389,17 @@ fn test_neighbors_geometry_with_max_distance() {
         let metric = EuclideanDistance;
         let accessor = SliceGeometryAccessor::new(&indexed_geometries);
 
-        let rtree_results =
-            tree.neighbors_geometry(&query_geom, None, Some(max_distance), &metric, &accessor);
+        let rtree_results = tree.neighbors_geometry(
+            &query_geom,
+            None,
+            Some(max_distance),
+            false,
+            &metric,
+            &accessor,
+        );
 
         // Verify all returned results are within max_distance
-        for &idx in &rtree_results {
+        for &(idx, _dist) in &rtree_results {
             let dist = Euclidean.distance(&query_geom, &indexed_geometries[idx as usize]);
             assert!(
                 dist <= max_distance,
@@ -405,12 +415,248 @@ fn test_neighbors_geometry_with_max_distance() {
             let dist = Euclidean.distance(&query_geom, geom);
             if dist <= max_distance {
                 assert!(
-                    rtree_results.contains(&(idx as u32)),
+                    rtree_results.iter().any(|&(result_idx, _dist)| result_idx == idx as u32),
                     "Geometry at index {} with distance {} should be in results but isn't (seed={})",
                     idx, dist, seed
                 );
             }
         }
+    }
+}
+
+/// Minimal reproducible test case for polygon-to-polygon distance ordering bug.
+///
+/// This test demonstrates that `neighbors_geometry` returns results in incorrect
+/// distance order when both the query and indexed geometries are polygons.
+/// The bug occurs because the algorithm uses bbox-center-to-bbox distance for
+/// internal node pruning, but this approximation doesn't correctly bound the
+/// actual geometry-to-geometry distance for non-point geometries.
+#[test]
+fn test_minimal_polygon_ordering_bug() {
+    // Create a specific arrangement of polygons where the bbox-center distance
+    // differs significantly from the actual polygon-to-polygon distance
+
+    // Small polygon at known location
+    let poly1 = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            coord! { x: 0.0, y: 0.0 },
+            coord! { x: 2.0, y: 0.0 },
+            coord! { x: 2.0, y: 2.0 },
+            coord! { x: 0.0, y: 2.0 },
+            coord! { x: 0.0, y: 0.0 },
+        ]),
+        vec![],
+    ));
+
+    // Polygon that is closer to query by geometry distance but farther by bbox center
+    let poly2 = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            coord! { x: 10.0, y: 0.0 },
+            coord! { x: 20.0, y: 0.0 },
+            coord! { x: 20.0, y: 2.0 },
+            coord! { x: 10.0, y: 2.0 },
+            coord! { x: 10.0, y: 0.0 },
+        ]),
+        vec![],
+    ));
+
+    // Polygon that is farther from query by geometry distance but closer by bbox center
+    let poly3 = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            coord! { x: 8.0, y: 8.0 },
+            coord! { x: 10.0, y: 8.0 },
+            coord! { x: 10.0, y: 10.0 },
+            coord! { x: 8.0, y: 10.0 },
+            coord! { x: 8.0, y: 8.0 },
+        ]),
+        vec![],
+    ));
+
+    let indexed_geometries = vec![poly1, poly2, poly3];
+
+    // Query polygon positioned such that:
+    // - Actual distance to poly2 (via its left edge at x=10) is smaller
+    // - But bbox center of poly2 is at (15, 1), which may appear farther
+    let query_geom = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            coord! { x: 5.0, y: 0.0 },
+            coord! { x: 7.0, y: 0.0 },
+            coord! { x: 7.0, y: 2.0 },
+            coord! { x: 5.0, y: 2.0 },
+            coord! { x: 5.0, y: 0.0 },
+        ]),
+        vec![],
+    ));
+
+    let tree = build_rtree_from_geometries(&indexed_geometries);
+    let metric = EuclideanDistance;
+    let accessor = SliceGeometryAccessor::new(&indexed_geometries);
+
+    let rtree_results =
+        tree.neighbors_geometry(&query_geom, Some(3), None, false, &metric, &accessor);
+
+    // Compute actual distances - distances are already returned!
+    let actual_distances: Vec<(usize, f64)> = rtree_results
+        .iter()
+        .map(|&(idx, dist)| (idx as usize, dist))
+        .collect();
+
+    // Verify results are in non-decreasing distance order
+    for i in 1..actual_distances.len() {
+        let prev = &actual_distances[i - 1];
+        let curr = &actual_distances[i];
+        assert!(
+            prev.1 <= curr.1 + 1e-10,
+            "Results out of order: idx {} (dist {}) should come after idx {} (dist {})",
+            prev.0,
+            prev.1,
+            curr.0,
+            curr.1
+        );
+    }
+
+    // Also verify against ground truth
+    let ground_truth = compute_knn_ground_truth(&query_geom, &indexed_geometries, 3);
+    let expected_indices: Vec<usize> = ground_truth.iter().map(|(idx, _)| *idx).collect();
+    let actual_indices: Vec<usize> = rtree_results
+        .iter()
+        .map(|&(idx, _dist)| idx as usize)
+        .collect();
+
+    // Print for debugging
+    println!("Query: {:?}", query_geom);
+    println!("Indexed geometries:");
+    for (i, geom) in indexed_geometries.iter().enumerate() {
+        let dist = Euclidean.distance(&query_geom, geom);
+        println!("  [{}]: dist={:.4}, geom={:?}", i, dist, geom);
+    }
+    println!("Ground truth order: {:?}", ground_truth);
+    println!("RTree result order: {:?}", actual_distances);
+
+    assert_eq!(
+        actual_indices, expected_indices,
+        "neighbors_geometry returned wrong order for polygon-to-polygon query"
+    );
+}
+
+/// Test that specifically triggers the bug where internal node distance estimates
+/// are incorrect for non-point query geometries.
+///
+/// The issue is in `neighbors_geometry`: for internal nodes, it uses:
+///   distance_metric.distance_to_bbox(center_x, center_y, ...)
+///
+/// But center_x, center_y is computed from the query's bounding box center,
+/// which may not be representative of the actual query geometry, especially
+/// for elongated or complex shapes.
+#[test]
+fn test_elongated_query_polygon_bug() {
+    // Create indexed geometries at different distances
+    let indexed_geometries: Vec<Geometry<f64>> = vec![
+        // Geometry 0: Close to the LEFT end of query
+        Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                coord! { x: 0.0, y: 4.0 },
+                coord! { x: 2.0, y: 4.0 },
+                coord! { x: 2.0, y: 6.0 },
+                coord! { x: 0.0, y: 6.0 },
+                coord! { x: 0.0, y: 4.0 },
+            ]),
+            vec![],
+        )),
+        // Geometry 1: Close to the RIGHT end of query (should be equally close)
+        Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                coord! { x: 98.0, y: 4.0 },
+                coord! { x: 100.0, y: 4.0 },
+                coord! { x: 100.0, y: 6.0 },
+                coord! { x: 98.0, y: 6.0 },
+                coord! { x: 98.0, y: 4.0 },
+            ]),
+            vec![],
+        )),
+        // Geometry 2: Close to the CENTER of query (farther from query geometry itself)
+        Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                coord! { x: 48.0, y: 15.0 },
+                coord! { x: 52.0, y: 15.0 },
+                coord! { x: 52.0, y: 20.0 },
+                coord! { x: 48.0, y: 20.0 },
+                coord! { x: 48.0, y: 15.0 },
+            ]),
+            vec![],
+        )),
+    ];
+
+    // Elongated horizontal query polygon: spans x=5 to x=95, y=5 to y=10
+    // Its bbox center is (50, 7.5), but the actual geometry extends far from center
+    let query_geom = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            coord! { x: 5.0, y: 5.0 },
+            coord! { x: 95.0, y: 5.0 },
+            coord! { x: 95.0, y: 10.0 },
+            coord! { x: 5.0, y: 10.0 },
+            coord! { x: 5.0, y: 5.0 },
+        ]),
+        vec![],
+    ));
+
+    // Actual distances:
+    // - To geom 0 (at x=0-2): distance from query left edge (x=5) ≈ 3
+    // - To geom 1 (at x=98-100): distance from query right edge (x=95) ≈ 3
+    // - To geom 2 (at y=15-20, centered at x=50): distance from query top (y=10) ≈ 5
+    //
+    // But if we use bbox center (50, 7.5):
+    // - To geom 0 bbox: center is (1, 5), distance from (50, 7.5) ≈ 49
+    // - To geom 1 bbox: center is (99, 5), distance from (50, 7.5) ≈ 49
+    // - To geom 2 bbox: center is (50, 17.5), distance from (50, 7.5) ≈ 10
+    //
+    // So the bbox-center heuristic would prioritize geom 2, but actual geometry
+    // distance shows geom 0 and 1 are closer!
+
+    let tree = build_rtree_from_geometries(&indexed_geometries);
+    let metric = EuclideanDistance;
+    let accessor = SliceGeometryAccessor::new(&indexed_geometries);
+
+    let rtree_results =
+        tree.neighbors_geometry(&query_geom, Some(3), None, false, &metric, &accessor);
+    let ground_truth = compute_knn_ground_truth(&query_geom, &indexed_geometries, 3);
+
+    // Print debugging info
+    println!("\n=== Elongated Query Polygon Bug Test ===");
+    println!("Query bbox center: (50, 7.5)");
+    for (i, geom) in indexed_geometries.iter().enumerate() {
+        let actual_dist = Euclidean.distance(&query_geom, geom);
+        let bbox = geom.bounding_rect().unwrap();
+        let center_x = (bbox.min().x + bbox.max().x) / 2.0;
+        let center_y = (bbox.min().y + bbox.max().y) / 2.0;
+        let bbox_center_dist = ((50.0 - center_x).powi(2) + (7.5 - center_y).powi(2)).sqrt();
+        println!(
+            "  Geom {}: actual_dist={:.2}, bbox_center=({:.1}, {:.1}), bbox_center_dist={:.2}",
+            i, actual_dist, center_x, center_y, bbox_center_dist
+        );
+    }
+    println!("Ground truth: {:?}", ground_truth);
+    println!(
+        "RTree results: {:?}",
+        rtree_results
+            .iter()
+            .map(|&(idx, dist)| (idx as usize, dist))
+            .collect::<Vec<_>>()
+    );
+
+    // Verify ordering - distances are already returned
+    let rtree_with_distances: Vec<(usize, f64)> = rtree_results
+        .iter()
+        .map(|&(idx, dist)| (idx as usize, dist))
+        .collect();
+
+    for i in 1..rtree_with_distances.len() {
+        assert!(
+            rtree_with_distances[i - 1].1 <= rtree_with_distances[i].1 + 1e-10,
+            "Results out of order: {:?} should come before {:?}",
+            rtree_with_distances[i],
+            rtree_with_distances[i - 1]
+        );
     }
 }
 
@@ -434,6 +680,58 @@ fn test_neighbors_empty_tree_returns_empty() {
 
     let results = tree.neighbors(50.0, 50.0, Some(10), None);
     assert!(results.is_empty());
+
+    let results = tree.neighbors(50.0, 50.0, None, Some(100.0));
+    assert!(results.is_empty());
+}
+
+#[test]
+fn test_neighbors_coord_empty_tree_returns_empty() {
+    use geo_traits::CoordTrait;
+
+    let builder = RTreeBuilder::<f64>::new(0);
+    let tree = builder.finish::<HilbertSort>();
+
+    struct TestCoord {
+        x: f64,
+        y: f64,
+    }
+    impl CoordTrait for TestCoord {
+        type T = f64;
+        fn x(&self) -> f64 {
+            self.x
+        }
+        fn y(&self) -> f64 {
+            self.y
+        }
+        fn dim(&self) -> geo_traits::Dimensions {
+            geo_traits::Dimensions::Xy
+        }
+        fn nth_or_panic(&self, n: usize) -> Self::T {
+            match n {
+                0 => self.x,
+                1 => self.y,
+                _ => panic!("Invalid dimension"),
+            }
+        }
+    }
+
+    let coord = TestCoord { x: 50.0, y: 50.0 };
+    let results = tree.neighbors_coord(&coord, None, None);
+    assert!(results.is_empty());
+}
+
+#[test]
+fn test_neighbors_with_distance_empty_tree_returns_empty() {
+    let builder = RTreeBuilder::<f64>::new(0);
+    let tree = builder.finish::<HilbertSort>();
+
+    let metric = EuclideanDistance;
+    let results = tree.neighbors_with_distance(50.0, 50.0, None, None, false, &metric);
+    assert!(results.is_empty());
+
+    let results = tree.neighbors_with_distance(50.0, 50.0, Some(10), None, false, &metric);
+    assert!(results.is_empty());
 }
 
 #[test]
@@ -446,6 +744,13 @@ fn test_neighbors_geometry_empty_tree_returns_empty() {
     let accessor = SliceGeometryAccessor::new(&geometries);
     let query_geom = Geometry::Point(Point::new(50.0, 50.0));
 
-    let results = tree.neighbors_geometry(&query_geom, Some(10), None, &metric, &accessor);
+    let results = tree.neighbors_geometry(&query_geom, None, None, false, &metric, &accessor);
+    assert!(results.is_empty());
+
+    let results = tree.neighbors_geometry(&query_geom, Some(10), None, false, &metric, &accessor);
+    assert!(results.is_empty());
+
+    let results =
+        tree.neighbors_geometry(&query_geom, None, Some(100.0), false, &metric, &accessor);
     assert!(results.is_empty());
 }
