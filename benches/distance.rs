@@ -51,8 +51,8 @@ fn generate_test_data(n: usize) -> (Vec<Point<f64>>, Vec<Geometry<f64>>) {
     let mut geometries = Vec::with_capacity(n);
 
     for i in 0..n {
-        let x = rng.gen_range(-180.0..180.0);
-        let y = rng.gen_range(-90.0..90.0);
+        let x = rng.random_range(-180.0..180.0);
+        let y = rng.random_range(-90.0..90.0);
         let point = Point::new(x, y);
         points.push(point);
 

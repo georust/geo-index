@@ -8,7 +8,6 @@ use crate::rtree::sort::HilbertSort;
 use crate::rtree::{RTreeBuilder, RTreeIndex};
 use geo_0_31::algorithm::{BoundingRect, Distance, Euclidean};
 use geo_0_31::{coord, Coord, Geometry, LineString, Point, Polygon, Rect};
-use rand::distributions::Uniform;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::f64::consts::PI;
@@ -36,39 +35,30 @@ impl Default for RandomGeometryOptions {
 
 /// Generate a random point within the given bounds
 fn generate_random_point<R: Rng>(rng: &mut R, options: &RandomGeometryOptions) -> Point {
-    let x_dist = Uniform::new(options.bounds.min().x, options.bounds.max().x);
-    let y_dist = Uniform::new(options.bounds.min().y, options.bounds.max().y);
-    Point::new(rng.sample(x_dist), rng.sample(y_dist))
+    Point::new(
+        rng.random_range(options.bounds.min().x..options.bounds.max().x),
+        rng.random_range(options.bounds.min().y..options.bounds.max().y),
+    )
 }
 
 /// Generate a random polygon within the given bounds
 fn generate_random_polygon<R: Rng>(rng: &mut R, options: &RandomGeometryOptions) -> Polygon {
     // Generate random center and size
-    let size_dist = Uniform::new(options.size_range.0, options.size_range.1);
-    let half_size = rng.sample(size_dist) / 2.0;
+    let half_size = rng.random_range(options.size_range.0..options.size_range.1) / 2.0;
 
     // Ensure polygon fits within bounds by constraining center position
-    let center_x_dist = Uniform::new(
-        options.bounds.min().x + half_size,
-        options.bounds.max().x - half_size,
-    );
-    let center_y_dist = Uniform::new(
-        options.bounds.min().y + half_size,
-        options.bounds.max().y - half_size,
-    );
-    let center_x = rng.sample(center_x_dist);
-    let center_y = rng.sample(center_y_dist);
+    let center_x = rng
+        .random_range((options.bounds.min().x + half_size)..(options.bounds.max().x - half_size));
+    let center_y = rng
+        .random_range((options.bounds.min().y + half_size)..(options.bounds.max().y - half_size));
 
     // Generate circular vertices
-    let vertices_dist = Uniform::new_inclusive(
-        options.vertices_per_polygon_range.0,
-        options.vertices_per_polygon_range.1,
-    );
-    let num_vertices = rng.sample(vertices_dist).max(3);
+    let num_vertices = rng
+        .random_range(options.vertices_per_polygon_range.0..=options.vertices_per_polygon_range.1)
+        .max(3);
 
     let mut coords = Vec::with_capacity(num_vertices + 1);
-    let start_angle_dist = Uniform::new(0.0, 2.0 * PI);
-    let mut angle: f64 = rng.sample(start_angle_dist);
+    let mut angle: f64 = rng.random_range(0.0..(2.0 * PI));
     let dangle = 2.0 * PI / num_vertices as f64;
 
     for _ in 0..num_vertices {
@@ -130,12 +120,8 @@ fn compute_knn_ground_truth(
 fn build_rtree_from_geometries(geometries: &[Geometry<f64>]) -> crate::rtree::RTree<f64> {
     let mut builder = RTreeBuilder::<f64>::new(geometries.len() as u32);
     for geom in geometries {
-        if let Some(rect) = geom.bounding_rect() {
-            builder.add(rect.min().x, rect.min().y, rect.max().x, rect.max().y);
-        } else {
-            // Fallback for geometries without bounding rect (shouldn't happen for points/polygons)
-            builder.add(0.0, 0.0, 0.0, 0.0);
-        }
+        let rect = geom.bounding_rect().unwrap();
+        builder.add(rect.min().x, rect.min().y, rect.max().x, rect.max().y);
     }
     builder.finish::<HilbertSort>()
 }
@@ -166,7 +152,7 @@ fn verify_neighbors_geometry(
         })
         .collect();
 
-    // Check that results are in non-decreasing distance order (the critical bug!)
+    // Check that results are in non-decreasing distance order
     for i in 1..rtree_with_distances.len() {
         let prev_dist = rtree_with_distances[i - 1].1;
         let curr_dist = rtree_with_distances[i].1;
@@ -334,7 +320,7 @@ fn test_neighbors_geometry_mixed_sizes() {
     // Generate polygons with varying sizes
     let mut indexed_geometries = Vec::new();
     for _ in 0..50 {
-        let size_range = if rng.gen_bool(0.5) {
+        let size_range = if rng.random_bool(0.5) {
             (0.5, 2.0) // Small polygons
         } else {
             (10.0, 30.0) // Large polygons
