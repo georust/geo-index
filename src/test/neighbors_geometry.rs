@@ -5,7 +5,7 @@
 
 use crate::rtree::distance::{EuclideanDistance, SliceGeometryAccessor};
 use crate::rtree::sort::HilbertSort;
-use crate::rtree::{RTreeBuilder, RTreeIndex};
+use crate::rtree::{NeighborsOptions, RTreeBuilder, RTreeIndex};
 use geo_0_31::algorithm::{BoundingRect, Distance, Euclidean};
 use geo_0_31::{coord, Coord, Geometry, LineString, Point, Polygon, Rect};
 use rand::rngs::StdRng;
@@ -139,7 +139,7 @@ fn verify_neighbors_geometry(
 
     // Get results from neighbors_geometry - now returns Vec<(u32, f64)>
     let rtree_results =
-        tree.neighbors_geometry(query_geometry, Some(k), None, false, &metric, &accessor);
+        tree.neighbors_geometry(query_geometry, NeighborsOptions::k(k), &metric, &accessor);
 
     // Get ground truth
     let ground_truth = compute_knn_ground_truth(query_geometry, indexed_geometries, k);
@@ -361,7 +361,7 @@ fn test_neighbors_geometry_k_larger_than_dataset() {
 
     // Request 10 neighbors but only 5 are available
     let rtree_results =
-        tree.neighbors_geometry(&query_geom, Some(10), None, false, &metric, &accessor);
+        tree.neighbors_geometry(&query_geom, NeighborsOptions::k(10), &metric, &accessor);
     let ground_truth = compute_knn_ground_truth(&query_geom, &indexed_geometries, 10);
 
     assert_eq!(rtree_results.len(), 5);
@@ -391,9 +391,7 @@ fn test_neighbors_geometry_with_max_distance() {
 
         let rtree_results = tree.neighbors_geometry(
             &query_geom,
-            None,
-            Some(max_distance),
-            false,
+            NeighborsOptions::all().max_distance(max_distance),
             &metric,
             &accessor,
         );
@@ -493,7 +491,7 @@ fn test_minimal_polygon_ordering_bug() {
     let accessor = SliceGeometryAccessor::new(&indexed_geometries);
 
     let rtree_results =
-        tree.neighbors_geometry(&query_geom, Some(3), None, false, &metric, &accessor);
+        tree.neighbors_geometry(&query_geom, NeighborsOptions::k(3), &metric, &accessor);
 
     // Compute actual distances - distances are already returned!
     let actual_distances: Vec<(usize, f64)> = rtree_results
@@ -618,7 +616,7 @@ fn test_elongated_query_polygon_bug() {
     let accessor = SliceGeometryAccessor::new(&indexed_geometries);
 
     let rtree_results =
-        tree.neighbors_geometry(&query_geom, Some(3), None, false, &metric, &accessor);
+        tree.neighbors_geometry(&query_geom, NeighborsOptions::k(3), &metric, &accessor);
     let ground_truth = compute_knn_ground_truth(&query_geom, &indexed_geometries, 3);
 
     // Print debugging info
@@ -727,10 +725,10 @@ fn test_neighbors_with_distance_empty_tree_returns_empty() {
     let tree = builder.finish::<HilbertSort>();
 
     let metric = EuclideanDistance;
-    let results = tree.neighbors_with_distance(50.0, 50.0, None, None, false, &metric);
+    let results = tree.neighbors_with_distance(50.0, 50.0, NeighborsOptions::all(), &metric);
     assert!(results.is_empty());
 
-    let results = tree.neighbors_with_distance(50.0, 50.0, Some(10), None, false, &metric);
+    let results = tree.neighbors_with_distance(50.0, 50.0, NeighborsOptions::k(10), &metric);
     assert!(results.is_empty());
 }
 
@@ -744,13 +742,17 @@ fn test_neighbors_geometry_empty_tree_returns_empty() {
     let accessor = SliceGeometryAccessor::new(&geometries);
     let query_geom = Geometry::Point(Point::new(50.0, 50.0));
 
-    let results = tree.neighbors_geometry(&query_geom, None, None, false, &metric, &accessor);
+    let results = tree.neighbors_geometry(&query_geom, NeighborsOptions::all(), &metric, &accessor);
     assert!(results.is_empty());
 
-    let results = tree.neighbors_geometry(&query_geom, Some(10), None, false, &metric, &accessor);
+    let results = tree.neighbors_geometry(&query_geom, NeighborsOptions::k(10), &metric, &accessor);
     assert!(results.is_empty());
 
-    let results =
-        tree.neighbors_geometry(&query_geom, None, Some(100.0), false, &metric, &accessor);
+    let results = tree.neighbors_geometry(
+        &query_geom,
+        NeighborsOptions::all().max_distance(100.0),
+        &metric,
+        &accessor,
+    );
     assert!(results.is_empty());
 }

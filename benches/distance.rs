@@ -5,7 +5,7 @@ use geo_index::rtree::distance::{
     DistanceMetric, EuclideanDistance, HaversineDistance, SliceGeometryAccessor,
 };
 use geo_index::rtree::sort::HilbertSort;
-use geo_index::rtree::{RTreeBuilder, RTreeIndex, SimpleDistanceMetric};
+use geo_index::rtree::{NeighborsOptions, RTreeBuilder, RTreeIndex, SimpleDistanceMetric};
 use geo_index::IndexableNum;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -116,9 +116,7 @@ fn benchmark_distance_metrics(c: &mut Criterion) {
                 tree.neighbors_with_distance(
                     query_point.x(),
                     query_point.y(),
-                    Some(10),
-                    None,
-                    false,
+                    NeighborsOptions::k(10),
                     &euclidean,
                 )
             })
@@ -129,9 +127,7 @@ fn benchmark_distance_metrics(c: &mut Criterion) {
                 tree.neighbors_with_distance(
                     query_point.x(),
                     query_point.y(),
-                    Some(10),
-                    None,
-                    false,
+                    NeighborsOptions::k(10),
                     &haversine,
                 )
             })
@@ -147,7 +143,12 @@ fn benchmark_distance_metrics(c: &mut Criterion) {
             let metric = SimpleMetric;
             let accessor = SliceGeometryAccessor::new(&geometries);
             b.iter(|| {
-                tree.neighbors_geometry(&query_geometry, Some(10), None, false, &metric, &accessor)
+                tree.neighbors_geometry(
+                    &query_geometry,
+                    NeighborsOptions::k(10),
+                    &metric,
+                    &accessor,
+                )
             })
         });
 
@@ -204,7 +205,7 @@ fn benchmark_comparison_with_baseline(c: &mut Criterion) {
 
     // Original neighbors method (baseline)
     group.bench_function("original_neighbors", |b| {
-        b.iter(|| tree.neighbors(query_point.x(), query_point.y(), Some(10), None))
+        b.iter(|| tree.neighbors(query_point.x(), query_point.y(), NeighborsOptions::k(10)))
     });
 
     // New neighbors_with_distance method
@@ -213,9 +214,7 @@ fn benchmark_comparison_with_baseline(c: &mut Criterion) {
             tree.neighbors_with_distance(
                 query_point.x(),
                 query_point.y(),
-                Some(10),
-                None,
-                false,
+                NeighborsOptions::k(10),
                 &euclidean,
             )
         })

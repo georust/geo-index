@@ -49,6 +49,62 @@ pub trait GeometryAccessor {
     fn get_geometry(&self, item_index: usize) -> Option<&Geometry<f64>>;
 }
 
+/// Options for nearest neighbor searches.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NeighborsOptions<N: IndexableNum> {
+    /// Maximum number of neighbors to return. None means unbounded.
+    pub k: Option<usize>,
+    /// Optional maximum distance threshold.
+    pub max_distance: Option<N>,
+    /// If true, include all items tied at rank k.
+    pub include_tie_breakers: bool,
+}
+
+impl<N: IndexableNum> Default for NeighborsOptions<N> {
+    fn default() -> Self {
+        Self {
+            k: Some(1),
+            max_distance: None,
+            include_tie_breakers: false,
+        }
+    }
+}
+
+impl<N: IndexableNum> NeighborsOptions<N> {
+    /// Create options for a single nearest neighbor.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create options for k nearest neighbors.
+    pub fn k(k: usize) -> Self {
+        Self {
+            k: Some(k),
+            ..Self::default()
+        }
+    }
+
+    /// Create options for an unbounded neighbor search.
+    pub fn all() -> Self {
+        Self {
+            k: None,
+            ..Self::default()
+        }
+    }
+
+    /// Set a maximum distance threshold.
+    pub fn max_distance(mut self, max_distance: N) -> Self {
+        self.max_distance = Some(max_distance);
+        self
+    }
+
+    /// Enable or disable tie breaker inclusion.
+    pub fn include_tie_breakers(mut self, include_tie_breakers: bool) -> Self {
+        self.include_tie_breakers = include_tie_breakers;
+        self
+    }
+}
+
 /// A trait for searching and accessing data out of an RTree.
 pub trait RTreeIndex<N: IndexableNum>: Sized {
     /// A slice representing all the bounding boxes of all elements contained within this tree,
@@ -200,6 +256,11 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
         max_results: Option<usize>,
         max_distance: Option<N>,
     ) -> Vec<u32> {
+        let options = NeighborsOptions {
+            k: max_results,
+            max_distance,
+            include_tie_breakers: false,
+        };
         // Use simple squared distance for backward compatibility
         struct SimpleSquaredDistance;
         impl<N: IndexableNum> SimpleDistanceMetric<N> for SimpleSquaredDistance {
@@ -215,17 +276,10 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
             }
         }
         let simple_distance = SimpleSquaredDistance;
-        self.neighbors_with_simple_distance(
-            x,
-            y,
-            max_results,
-            max_distance,
-            false,
-            &simple_distance,
-        )
-        .into_iter()
-        .map(|(idx, _dist)| idx)
-        .collect()
+        self.neighbors_with_simple_distance(x, y, options, &simple_distance)
+            .into_iter()
+            .map(|(idx, _dist)| idx)
+            .collect()
     }
 
     /// Search items in order of distance from the given point using a simple distance metric.
@@ -235,9 +289,7 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
     /// # Arguments
     /// * `x` - The x coordinate of the query point
     /// * `y` - The y coordinate of the query point
-    /// * `k` - Maximum number of neighbors to return. May return more if `include_tie_breakers` is true
-    /// * `max_distance` - Optional maximum distance threshold
-    /// * `include_tie_breakers` - If true, includes all items tied at rank k. May return more than k items
+    /// * `options` - Neighbor search options
     /// * `distance_metric` - The distance metric to use
     ///
     /// # Returns
@@ -246,11 +298,17 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
         &self,
         x: N,
         y: N,
-        k: Option<usize>,
-        max_distance: Option<N>,
-        include_tie_breakers: bool,
+        options: NeighborsOptions<N>,
         distance_metric: &M,
     ) -> Vec<(u32, N)> {
+        let NeighborsOptions {
+            k,
+            max_distance,
+            include_tie_breakers,
+        } = options;
+        if k == Some(0) {
+            return vec![];
+        }
         let boxes = self.boxes();
         if boxes.is_empty() {
             return vec![];
@@ -315,10 +373,10 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
                     break 'outer;
                 }
 
-                // If including tie breakers and we have k items, record the k-th distance
+                // If including tie breakers and we're about to add the k-th item, record its distance
                 if include_tie_breakers
-                    && k.is_some_and(|k_val| results.len() == k_val)
                     && kth_distance.is_none()
+                    && k.is_some_and(|k_val| results.len() + 1 == k_val)
                 {
                     kth_distance = Some(dist);
                 }
@@ -351,9 +409,7 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
     /// # Arguments
     /// * `x` - The x coordinate of the query point
     /// * `y` - The y coordinate of the query point
-    /// * `k` - Maximum number of neighbors to return. May return more if `include_tie_breakers` is true
-    /// * `max_distance` - Optional maximum distance threshold
-    /// * `include_tie_breakers` - If true, includes all items tied at rank k. May return more than k items
+    /// * `options` - Neighbor search options
     /// * `distance_metric` - The distance metric to use
     ///
     /// # Returns
@@ -374,7 +430,13 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
     ///
     /// // Find nearest neighbors using Haversine distance (great-circle distance)
     /// let haversine = HaversineDistance::default();
-    /// let results = tree.neighbors_with_distance(-74.0, 40.7, Some(2), None, false, &haversine);
+    /// use geo_index::rtree::NeighborsOptions;
+    /// let results = tree.neighbors_with_distance(
+    ///     -74.0,
+    ///     40.7,
+    ///     NeighborsOptions::k(2),
+    ///     &haversine,
+    /// );
     /// // Results: [(0, 0.0), (1, 5570000.0)]  // distances in meters
     /// ```
     #[cfg(feature = "use-geo_0_31")]
@@ -382,19 +444,10 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
         &self,
         x: N,
         y: N,
-        k: Option<usize>,
-        max_distance: Option<N>,
-        include_tie_breakers: bool,
+        options: NeighborsOptions<N>,
         distance_metric: &M,
     ) -> Vec<(u32, N)> {
-        self.neighbors_with_simple_distance(
-            x,
-            y,
-            k,
-            max_distance,
-            include_tie_breakers,
-            distance_metric,
-        )
+        self.neighbors_with_simple_distance(x, y, options, distance_metric)
     }
 
     /// Search items in order of distance from the given coordinate.
@@ -411,9 +464,7 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
     ///
     /// # Arguments
     /// * `coord` - The query coordinate
-    /// * `k` - Maximum number of neighbors to return. May return more if `include_tie_breakers` is true
-    /// * `max_distance` - Optional maximum distance threshold
-    /// * `include_tie_breakers` - If true, includes all items tied at rank k. May return more than k items
+    /// * `options` - Neighbor search options
     /// * `distance_metric` - The distance metric to use
     ///
     /// # Returns
@@ -422,19 +473,10 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
     fn neighbors_coord_with_distance<M: DistanceMetric<N> + ?Sized>(
         &self,
         coord: &impl CoordTrait<T = N>,
-        k: Option<usize>,
-        max_distance: Option<N>,
-        include_tie_breakers: bool,
+        options: NeighborsOptions<N>,
         distance_metric: &M,
     ) -> Vec<(u32, N)> {
-        self.neighbors_with_distance(
-            coord.x(),
-            coord.y(),
-            k,
-            max_distance,
-            include_tie_breakers,
-            distance_metric,
-        )
+        self.neighbors_with_distance(coord.x(), coord.y(), options, distance_metric)
     }
 
     /// Search items in order of distance from a query geometry using a distance metric and geometry accessor.
@@ -445,9 +487,7 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
     ///
     /// # Arguments
     /// * `query_geometry` - The query geometry
-    /// * `k` - Maximum number of neighbors to return. May return more if `include_tie_breakers` is true
-    /// * `max_distance` - Optional maximum distance threshold
-    /// * `include_tie_breakers` - If true, includes all items tied at rank k. May return more than k items
+    /// * `options` - Neighbor search options
     /// * `distance_metric` - The distance metric to use
     /// * `accessor` - Provides access to geometries by index
     ///
@@ -478,19 +518,31 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
     /// let metric = EuclideanDistance;
     /// let accessor = SliceGeometryAccessor::new(&geometries);
     /// let query_geom = Geometry::Point(Point::new(3.0, 3.0));
-    /// let results = tree.neighbors_geometry(&query_geom, None, None, false, &metric, &accessor);
+    /// use geo_index::rtree::NeighborsOptions;
+    /// let results = tree.neighbors_geometry(
+    ///     &query_geom,
+    ///     NeighborsOptions::all(),
+    ///     &metric,
+    ///     &accessor,
+    /// );
     /// // Results: [(0, 2.82...), (1, 4.24...), (2, 11.31...)]
     /// ```
     #[cfg(feature = "use-geo_0_31")]
     fn neighbors_geometry<M: DistanceMetric<N> + ?Sized, A: GeometryAccessor + ?Sized>(
         &self,
         query_geometry: &Geometry<f64>,
-        k: Option<usize>,
-        max_distance: Option<N>,
-        include_tie_breakers: bool,
+        options: NeighborsOptions<N>,
         distance_metric: &M,
         accessor: &A,
     ) -> Vec<(u32, N)> {
+        let NeighborsOptions {
+            k,
+            max_distance,
+            include_tie_breakers,
+        } = options;
+        if k == Some(0) {
+            return vec![];
+        }
         let boxes = self.boxes();
         if boxes.is_empty() {
             return vec![];
@@ -562,10 +614,10 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
                     break 'outer;
                 }
 
-                // If including tie breakers and we have k items, record the k-th distance
+                // If including tie breakers and we're about to add the k-th item, record its distance
                 if include_tie_breakers
-                    && k.is_some_and(|k_val| results.len() == k_val)
                     && kth_distance.is_none()
+                    && k.is_some_and(|k_val| results.len() + 1 == k_val)
                 {
                     kth_distance = Some(dist);
                 }
@@ -705,7 +757,7 @@ mod test {
         use crate::rtree::distance::{EuclideanDistance, HaversineDistance};
         use crate::rtree::r#trait::SimpleDistanceMetric;
         use crate::rtree::sort::HilbertSort;
-        use crate::rtree::{RTreeBuilder, RTreeIndex};
+        use crate::rtree::{NeighborsOptions, RTreeBuilder, RTreeIndex};
 
         #[test]
         fn test_euclidean_distance_neighbors() {
@@ -716,7 +768,7 @@ mod test {
             let tree = builder.finish::<HilbertSort>();
 
             let euclidean = EuclideanDistance;
-            let results = tree.neighbors_with_distance(0., 0., None, None, false, &euclidean);
+            let results = tree.neighbors_with_distance(0., 0., NeighborsOptions::all(), &euclidean);
 
             // Should return items in order of distance from (0,0)
             assert_eq!(results.len(), 3);
@@ -738,7 +790,8 @@ mod test {
             let tree = builder.finish::<HilbertSort>();
 
             let haversine = HaversineDistance::default();
-            let results = tree.neighbors_with_distance(-74.0, 40.7, None, None, false, &haversine);
+            let results =
+                tree.neighbors_with_distance(-74.0, 40.7, NeighborsOptions::all(), &haversine);
 
             // From New York, should find New York first, then London, then Tokyo
             assert_eq!(results.len(), 3);
@@ -765,7 +818,7 @@ mod test {
             // Test that new method with Euclidean distance gives same order (just extract indices)
             let euclidean = EuclideanDistance;
             let results_new = tree
-                .neighbors_with_distance(0., 0., None, None, false, &euclidean)
+                .neighbors_with_distance(0., 0., NeighborsOptions::all(), &euclidean)
                 .into_iter()
                 .map(|(idx, _dist)| idx)
                 .collect::<Vec<_>>();
@@ -783,12 +836,41 @@ mod test {
 
             let euclidean = EuclideanDistance;
             // Only find neighbors within distance 5
-            let results = tree.neighbors_with_distance(0., 0., None, Some(5.0), false, &euclidean);
+            let results = tree.neighbors_with_distance(
+                0.,
+                0.,
+                NeighborsOptions::all().max_distance(5.0),
+                &euclidean,
+            );
 
             // Should only find first two items, not the distant third one
             assert_eq!(results.len(), 2);
             assert_eq!(results[0].0, 0);
             assert_eq!(results[1].0, 1);
+        }
+
+        #[test]
+        fn test_tie_breakers_enabled_without_ties() {
+            let mut builder = RTreeBuilder::<f64>::new(5);
+            builder.add(0., 0., 0., 0.); // Item 0: distance 0
+            builder.add(1., 0., 1., 0.); // Item 1: distance 1
+            builder.add(0., 2., 0., 2.); // Item 2: distance 2
+            builder.add(3., 0., 3., 0.); // Item 3: distance 3
+            builder.add(0., 4., 0., 4.); // Item 4: distance 4
+            let tree = builder.finish::<HilbertSort>();
+
+            let euclidean = EuclideanDistance;
+            let results = tree.neighbors_with_distance(
+                0.,
+                0.,
+                NeighborsOptions::k(3).include_tie_breakers(true),
+                &euclidean,
+            );
+
+            assert_eq!(results.len(), 3);
+            assert_eq!(results[0].0, 0);
+            assert_eq!(results[1].0, 1);
+            assert_eq!(results[2].0, 2);
         }
 
         #[test]
@@ -855,7 +937,7 @@ mod test {
             let metric = SimpleMetric;
             let accessor = SliceGeometryAccessor::new(&geometries);
             let results =
-                tree.neighbors_geometry(&query_geom, None, None, false, &metric, &accessor);
+                tree.neighbors_geometry(&query_geom, NeighborsOptions::all(), &metric, &accessor);
 
             // Item 0 should be closest to query point (3,3)
             assert_eq!(results[0].0, 0);
@@ -936,7 +1018,7 @@ mod test {
             let metric = SimpleMetric;
             let accessor = SliceGeometryAccessor::new(&geometries);
             let results =
-                tree.neighbors_geometry(&query_geom, None, None, false, &metric, &accessor);
+                tree.neighbors_geometry(&query_geom, NeighborsOptions::all(), &metric, &accessor);
 
             // Item 0 (bottom line) should be closest to point (5, 2)
             assert_eq!(results[0].0, 0);
@@ -1008,7 +1090,7 @@ mod test {
             let metric = SimpleMetric;
             let accessor = SliceGeometryAccessor::new(&geometries);
             let results =
-                tree.neighbors_geometry(&query_geom, Some(3), None, false, &metric, &accessor);
+                tree.neighbors_geometry(&query_geom, NeighborsOptions::k(3), &metric, &accessor);
 
             assert_eq!(results.len(), 3);
             // Should get the 3 closest items
@@ -1076,7 +1158,7 @@ mod test {
             let metric = HaversineMetric;
             let accessor = SliceGeometryAccessor::new(&geometries);
             let results =
-                tree.neighbors_geometry(&query_geom, None, None, false, &metric, &accessor);
+                tree.neighbors_geometry(&query_geom, NeighborsOptions::all(), &metric, &accessor);
 
             // New York should be closest (distance 0)
             assert_eq!(results[0].0, 0);
@@ -1095,7 +1177,7 @@ mod test {
 
             let euclidean = EuclideanDistance;
             // Request k=3 without tie breakers
-            let results = tree.neighbors_with_distance(0., 0., Some(3), None, false, &euclidean);
+            let results = tree.neighbors_with_distance(0., 0., NeighborsOptions::k(3), &euclidean);
 
             // Should return exactly 3 items
             assert_eq!(results.len(), 3);
@@ -1119,7 +1201,12 @@ mod test {
 
             let euclidean = EuclideanDistance;
             // Request k=3 with tie breakers
-            let results = tree.neighbors_with_distance(0., 0., Some(3), None, true, &euclidean);
+            let results = tree.neighbors_with_distance(
+                0.,
+                0.,
+                NeighborsOptions::k(3).include_tie_breakers(true),
+                &euclidean,
+            );
 
             // Should return 4 items (includes both items at distance 2)
             assert_eq!(results.len(), 4);
@@ -1140,7 +1227,7 @@ mod test {
             let tree = builder.finish::<HilbertSort>();
 
             let euclidean = EuclideanDistance;
-            let results = tree.neighbors_with_distance(0., 0., None, None, false, &euclidean);
+            let results = tree.neighbors_with_distance(0., 0., NeighborsOptions::all(), &euclidean);
 
             // Verify distance values are correct
             assert_eq!(results.len(), 3);
@@ -1214,11 +1301,15 @@ mod test {
             let accessor = SliceGeometryAccessor::new(&geometries);
 
             // Test with tie breakers enabled
-            let results =
-                tree.neighbors_geometry(&query_geom, Some(2), None, true, &metric, &accessor);
+            let results = tree.neighbors_geometry(
+                &query_geom,
+                NeighborsOptions::k(3).include_tie_breakers(true),
+                &metric,
+                &accessor,
+            );
 
             // Should return 4 items: item 0 (distance 0), item 1 (distance 1),
-            // and both items 2 and 3 (both at distance 2, tied at k=2)
+            // and both items 2 and 3 (both at distance 2, tied at k=3)
             assert_eq!(results.len(), 4);
             assert_eq!(results[0].0, 0);
             assert_eq!(results[1].0, 1);
