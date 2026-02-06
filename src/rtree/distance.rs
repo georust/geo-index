@@ -6,7 +6,7 @@
 use crate::r#type::IndexableNum;
 use crate::rtree::r#trait::{axis_dist, SimpleDistanceMetric};
 use geo_0_31::algorithm::{Distance, Euclidean, Haversine};
-use geo_0_31::{Geometry, Point};
+use geo_0_31::{coord, Geometry, Point, Rect};
 
 pub use crate::rtree::r#trait::GeometryAccessor;
 
@@ -22,6 +22,53 @@ pub trait DistanceMetric<N: IndexableNum>: SimpleDistanceMetric<N> {
     /// `Geometry<f64>` type for better flexibility and integration with geo-traits.
     /// This would be a non-breaking change since Geometry implements GeometryTrait.
     fn distance_to_geometry(&self, geom1: &Geometry<f64>, geom2: &Geometry<f64>) -> N;
+
+    /// Calculate the distance from a geometry to a bounding box.
+    ///
+    /// This method is used for internal node distance estimation in geometry-based
+    /// neighbor searches. The returned distance should be a lower bound on the actual
+    /// distance from the query geometry to any geometry contained within the bounding box.
+    ///
+    /// The default implementation checks if the geometry is a Point, and if so, uses the
+    /// faster `distance_to_bbox` method. Otherwise, it wraps the bounding box as a `Rect`
+    /// and uses `distance_to_geometry`. Implementations may override this for better performance.
+    fn distance_geometry_to_bbox(
+        &self,
+        geom: &Geometry<f64>,
+        min_x: N,
+        min_y: N,
+        max_x: N,
+        max_y: N,
+    ) -> N {
+        // Fast path for points: use distance_to_bbox directly
+        if let Geometry::Point(p) = geom {
+            let (Some(x), Some(y)) = (N::from_f64(p.x()), N::from_f64(p.y())) else {
+                return self.max_distance();
+            };
+            self.distance_to_bbox(x, y, min_x, min_y, max_x, max_y)
+        } else {
+            // General case: wrap bbox as Rect and use distance_to_geometry
+            let (Some(min_x), Some(min_y), Some(max_x), Some(max_y)) = (
+                min_x.to_f64(),
+                min_y.to_f64(),
+                max_x.to_f64(),
+                max_y.to_f64(),
+            ) else {
+                return self.max_distance();
+            };
+            let bbox = Rect::new(
+                coord! {
+                    x: min_x,
+                    y: min_y
+                },
+                coord! {
+                    x: max_x,
+                    y: max_y
+                },
+            );
+            self.distance_to_geometry(geom, &Geometry::Rect(bbox))
+        }
+    }
 }
 
 /// Euclidean distance metric.

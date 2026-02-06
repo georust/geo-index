@@ -32,7 +32,7 @@ geo_0_31 = { package = "geo", version = "0.31.0" }
 geozero = { version = "0.14", features = ["with-wkb", "with-geo"] }
 rstar = "0.12"
 zip = "2.2.2"
-rand = "0.8"
+rand = "0.9"
 
 [[bench]]
 name = "rtree"
