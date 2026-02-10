@@ -205,7 +205,7 @@ fn benchmark_comparison_with_baseline(c: &mut Criterion) {
 
     // Original neighbors method (baseline)
     group.bench_function("original_neighbors", |b| {
-        b.iter(|| tree.neighbors(query_point.x(), query_point.y(), NeighborsOptions::k(10)))
+        b.iter(|| tree.neighbors(query_point.x(), query_point.y(), Some(10), None))
     });
 
     // New neighbors_with_distance method
