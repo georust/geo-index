@@ -6,8 +6,8 @@
 
 ## Bug fixes
 
-* Fix distance computation in nearest neighbor search when the query window is not a point by @kontinuation in https://github.com/georust/geo-index/pull/141
-* Fix panic when performing nearest neighbor search on an empty RTree by @kontinuation in https://github.com/georust/geo-index/pull/141
+* Fix distance computation in nearest neighbor search when the query window is not a point by @kontinuation in https://github.com/georust/geo-index/pull/151
+* Fix panic when performing nearest neighbor search on an empty RTree by @kontinuation in https://github.com/georust/geo-index/pull/151
 
 ## [0.3.2] - 2025-11-23
 
