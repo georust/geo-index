@@ -874,6 +874,112 @@ mod test {
         }
 
         #[test]
+        fn test_tie_breakers_k1_includes_all_nearest() {
+            let mut builder = RTreeBuilder::<f64>::new(4);
+            builder.add(1., 0., 1., 0.);
+            builder.add(-1., 0., -1., 0.);
+            builder.add(0., 1., 0., 1.);
+            builder.add(0., -1., 0., -1.);
+            let tree = builder.finish::<HilbertSort>();
+
+            let euclidean = EuclideanDistance;
+            let results = tree.neighbors_with_distance(
+                0.,
+                0.,
+                NeighborsOptions::k(1).include_tie_breakers(true),
+                &euclidean,
+            );
+
+            assert_eq!(results.len(), 4);
+            for (_, dist) in &results {
+                assert!((*dist - 1.0).abs() < 1e-10);
+            }
+
+            let results_no_ties =
+                tree.neighbors_with_distance(0., 0., NeighborsOptions::k(1), &euclidean);
+            assert_eq!(results_no_ties.len(), 1);
+        }
+
+        #[test]
+        fn test_tie_breakers_ignored_when_unbounded() {
+            let mut builder = RTreeBuilder::<f64>::new(3);
+            builder.add(1., 0., 1., 0.); // distance 1
+            builder.add(2., 0., 2., 0.); // distance 2
+            builder.add(3., 0., 3., 0.); // distance 3
+            let tree = builder.finish::<HilbertSort>();
+
+            let euclidean = EuclideanDistance;
+            let results_default =
+                tree.neighbors_with_distance(0., 0., NeighborsOptions::all(), &euclidean);
+            let results_ties = tree.neighbors_with_distance(
+                0.,
+                0.,
+                NeighborsOptions::all().include_tie_breakers(true),
+                &euclidean,
+            );
+
+            assert_eq!(results_default, results_ties);
+        }
+
+        #[test]
+        fn test_tie_breakers_with_max_distance_boundary() {
+            let mut builder = RTreeBuilder::<f64>::new(4);
+            builder.add(1., 0., 1., 0.); // distance 1
+            builder.add(2., 0., 2., 0.); // distance 2
+            builder.add(0., 2., 0., 2.); // distance 2
+            builder.add(3., 0., 3., 0.); // distance 3
+            let tree = builder.finish::<HilbertSort>();
+
+            let euclidean = EuclideanDistance;
+            let results = tree.neighbors_with_distance(
+                0.,
+                0.,
+                NeighborsOptions::k(2)
+                    .include_tie_breakers(true)
+                    .max_distance(2.0),
+                &euclidean,
+            );
+
+            assert_eq!(results.len(), 3);
+            let mut indices: Vec<u32> = results.iter().map(|(idx, _)| *idx).collect();
+            indices.sort();
+            assert_eq!(indices, vec![0, 1, 2]);
+            for (_, dist) in &results {
+                assert!(*dist <= 2.0 + 1e-10);
+            }
+        }
+
+        #[test]
+        fn test_many_way_tie_at_kth_distance() {
+            let mut builder = RTreeBuilder::<f64>::new(9);
+            builder.add(1., 0., 1., 0.); // distance 1
+            builder.add(2., 0., 2., 0.);
+            builder.add(-2., 0., -2., 0.);
+            builder.add(0., 2., 0., 2.);
+            builder.add(0., -2., 0., -2.);
+            builder.add(2., 0., 2., 0.);
+            builder.add(-2., 0., -2., 0.);
+            builder.add(0., 2., 0., 2.);
+            builder.add(0., -2., 0., -2.);
+            let tree = builder.finish::<HilbertSort>();
+
+            let euclidean = EuclideanDistance;
+            let results = tree.neighbors_with_distance(
+                0.,
+                0.,
+                NeighborsOptions::k(2).include_tie_breakers(true),
+                &euclidean,
+            );
+
+            assert_eq!(results.len(), 9);
+            let tie_count = results
+                .iter()
+                .filter(|(_, dist)| (*dist - 2.0).abs() < 1e-10)
+                .count();
+            assert_eq!(tie_count, 8);
+        }
+
+        #[test]
         #[cfg(feature = "use-geo_0_31")]
         fn test_geometry_neighbors_euclidean() {
             use crate::r#type::IndexableNum;
