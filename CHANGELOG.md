@@ -2,12 +2,12 @@
 
 **This is the changelog for the core Rust library**. There's a [separate changelog](./python/CHANGELOG.md) for the Python bindings.
 
-## [0.3.3]
+## [0.3.3] - 2026-02-11
 
 ## Bug fixes
 
-* Fix distance computation in nearest neighbor search when the query window is not a point by @kontinuation in https://github.com/georust/geo-index/pull/141
-* Fix panic when performing nearest neighbor search on an empty RTree by @kontinuation in https://github.com/georust/geo-index/pull/141
+* Fix distance computation in nearest neighbor search when the query window is not a point by @kontinuation in https://github.com/georust/geo-index/pull/151
+* Fix panic when performing nearest neighbor search on an empty RTree by @kontinuation in https://github.com/georust/geo-index/pull/151
 
 ## [0.3.2] - 2025-11-23
 
