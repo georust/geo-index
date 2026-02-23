@@ -901,7 +901,7 @@ mod test {
         }
 
         #[test]
-        fn test_tie_breakers_ignored_when_unbounded() {
+        fn test_tie_breakers_enabled_when_unbounded() {
             let mut builder = RTreeBuilder::<f64>::new(3);
             builder.add(1., 0., 1., 0.); // distance 1
             builder.add(2., 0., 2., 0.); // distance 2
@@ -947,12 +947,23 @@ mod test {
             for (_, dist) in &results {
                 assert!(*dist <= 2.0 + 1e-10);
             }
+
+            let results = tree.neighbors_with_distance(
+                0.,
+                0.,
+                NeighborsOptions::k(2)
+                    .include_tie_breakers(true)
+                    .max_distance(1.5),
+                &euclidean,
+            );
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].0, 0);
         }
 
         #[test]
-        fn test_many_way_tie_at_kth_distance() {
+        fn test_tie_at_kth_distance_is_the_largest_distance() {
             let mut builder = RTreeBuilder::<f64>::new(9);
-            builder.add(1., 0., 1., 0.); // distance 1
+            builder.add(1., 0., 1., 0.);
             builder.add(2., 0., 2., 0.);
             builder.add(-2., 0., -2., 0.);
             builder.add(0., 2., 0., 2.);
@@ -964,19 +975,72 @@ mod test {
             let tree = builder.finish::<HilbertSort>();
 
             let euclidean = EuclideanDistance;
-            let results = tree.neighbors_with_distance(
-                0.,
-                0.,
-                NeighborsOptions::k(2).include_tie_breakers(true),
-                &euclidean,
-            );
+            for k in 2..=10 {
+                let results = tree.neighbors_with_distance(
+                    0.,
+                    0.,
+                    NeighborsOptions::k(k).include_tie_breakers(true),
+                    &euclidean,
+                );
 
-            assert_eq!(results.len(), 9);
-            let tie_count = results
-                .iter()
-                .filter(|(_, dist)| (*dist - 2.0).abs() < 1e-10)
-                .count();
-            assert_eq!(tie_count, 8);
+                assert_eq!(results.len(), 9);
+                let tie_count = results
+                    .iter()
+                    .filter(|(_, dist)| (*dist - 2.0).abs() < 1e-10)
+                    .count();
+                assert_eq!(tie_count, 8);
+            }
+        }
+
+        #[test]
+        fn test_many_tie_at_kth_distance() {
+            let mut builder = RTreeBuilder::<f64>::new(7);
+            builder.add(1., 0., 1., 0.);
+            builder.add(2., 0., 2., 0.);
+            builder.add(-2., 0., -2., 0.);
+            builder.add(0., 2., 0., 2.);
+            builder.add(0., -2., 0., -2.);
+            builder.add(3., 0., 3., 0.);
+            builder.add(-3., 0., -3., 0.);
+            let tree = builder.finish::<HilbertSort>();
+
+            let euclidean = EuclideanDistance;
+            for k in 2..=5 {
+                let results = tree.neighbors_with_distance(
+                    0.,
+                    0.,
+                    NeighborsOptions::k(k).include_tie_breakers(true),
+                    &euclidean,
+                );
+
+                assert_eq!(results.len(), 5);
+                let tie_count = results
+                    .iter()
+                    .filter(|(_, dist)| (*dist - 2.0).abs() < 1e-10)
+                    .count();
+                assert_eq!(tie_count, 4);
+            }
+
+            for k in 6..10 {
+                let results = tree.neighbors_with_distance(
+                    0.,
+                    0.,
+                    NeighborsOptions::k(k).include_tie_breakers(true),
+                    &euclidean,
+                );
+
+                assert_eq!(results.len(), 7);
+                let tie_count = results
+                    .iter()
+                    .filter(|(_, dist)| (*dist - 2.0).abs() < 1e-10)
+                    .count();
+                assert_eq!(tie_count, 4);
+                let tie_count = results
+                    .iter()
+                    .filter(|(_, dist)| (*dist - 3.0).abs() < 1e-10)
+                    .count();
+                assert_eq!(tie_count, 2);
+            }
         }
 
         #[test]
@@ -1271,60 +1335,6 @@ mod test {
         }
 
         #[test]
-        fn test_tie_breakers_disabled() {
-            let mut builder = RTreeBuilder::<f64>::new(5);
-            // Create points at specific distances
-            builder.add(0., 0., 0., 0.); // Item 0: distance 0
-            builder.add(1., 0., 1., 0.); // Item 1: distance 1
-            builder.add(0., 2., 0., 2.); // Item 2: distance 2
-            builder.add(2., 0., 2., 0.); // Item 3: distance 2 (tie with item 2)
-            builder.add(0., 3., 0., 3.); // Item 4: distance 3
-            let tree = builder.finish::<HilbertSort>();
-
-            let euclidean = EuclideanDistance;
-            // Request k=3 without tie breakers
-            let results = tree.neighbors_with_distance(0., 0., NeighborsOptions::k(3), &euclidean);
-
-            // Should return exactly 3 items
-            assert_eq!(results.len(), 3);
-            assert_eq!(results[0].0, 0);
-            assert_eq!(results[1].0, 1);
-            // Third item is either 2 or 3 (both at distance 2), but exactly 3 items total
-            assert!(results[2].0 == 2 || results[2].0 == 3);
-            assert_eq!(results[2].1, 2.0); // Distance should be 2
-        }
-
-        #[test]
-        fn test_tie_breakers_enabled() {
-            let mut builder = RTreeBuilder::<f64>::new(5);
-            // Create points at specific distances
-            builder.add(0., 0., 0., 0.); // Item 0: distance 0
-            builder.add(1., 0., 1., 0.); // Item 1: distance 1
-            builder.add(0., 2., 0., 2.); // Item 2: distance 2
-            builder.add(2., 0., 2., 0.); // Item 3: distance 2 (tie with item 2)
-            builder.add(0., 3., 0., 3.); // Item 4: distance 3
-            let tree = builder.finish::<HilbertSort>();
-
-            let euclidean = EuclideanDistance;
-            // Request k=3 with tie breakers
-            let results = tree.neighbors_with_distance(
-                0.,
-                0.,
-                NeighborsOptions::k(3).include_tie_breakers(true),
-                &euclidean,
-            );
-
-            // Should return 4 items (includes both items at distance 2)
-            assert_eq!(results.len(), 4);
-            assert_eq!(results[0].0, 0);
-            assert_eq!(results[1].0, 1);
-            // Items 2 and 3 both have distance 2, so both should be included
-            let indices: Vec<u32> = results.iter().map(|(idx, _)| *idx).collect();
-            assert!(indices.contains(&2));
-            assert!(indices.contains(&3));
-        }
-
-        #[test]
         fn test_distance_values_returned() {
             let mut builder = RTreeBuilder::<f64>::new(3);
             builder.add(0., 0., 0., 0.); // Item 0: distance 0
@@ -1423,6 +1433,16 @@ mod test {
             let indices: Vec<u32> = results.iter().map(|(idx, _)| *idx).collect();
             assert!(indices.contains(&2));
             assert!(indices.contains(&3));
+
+            // Test with tie breakers disabled
+            let results_no_ties =
+                tree.neighbors_geometry(&query_geom, NeighborsOptions::k(3), &metric, &accessor);
+            // Should return only 3 items: item 0 (distance 0), item 1 (distance 1),
+            // and either item 2 or item 3 (but not both, since tie breakers are disabled)
+            assert_eq!(results_no_ties.len(), 3);
+            assert_eq!(results_no_ties[0].0, 0);
+            assert_eq!(results_no_ties[1].0, 1);
+            assert!(results_no_ties[2].0 == 2 || results_no_ties[2].0 == 3);
         }
     }
 }
