@@ -116,57 +116,66 @@ fn sort<N: IndexableNum>(
     values: &mut [N],
     boxes: &mut [N],
     indices: &mut MutableIndices,
-    left: usize,
-    right: usize,
+    mut left: usize,
+    mut right: usize,
     node_size: usize,
 ) {
-    debug_assert!(left <= right);
-
-    if left / node_size >= right / node_size {
-        return;
-    }
-
-    // apply median of three method
-    let start = values[left];
-    let mid = values[(left + right) >> 1];
-    let end = values[right];
-
-    let x = partial_ord_max(start, mid);
-    let pivot = if end > x {
-        x
-    } else if x == start {
-        partial_ord_max(mid, end)
-    } else if x == mid {
-        partial_ord_max(start, end)
-    } else {
-        end
-    };
-
-    let mut i = left.wrapping_sub(1);
-    let mut j = right.wrapping_add(1);
-
     loop {
-        loop {
-            i = i.wrapping_add(1);
-            if values[i] >= pivot {
-                break;
-            }
+        debug_assert!(left <= right);
+
+        if left / node_size >= right / node_size {
+            return;
         }
+
+        // apply median of three method
+        let start = values[left];
+        let mid = values[(left + right) >> 1];
+        let end = values[right];
+
+        let x = partial_ord_max(start, mid);
+        let pivot = if end > x {
+            x
+        } else if x == start {
+            partial_ord_max(mid, end)
+        } else if x == mid {
+            partial_ord_max(start, end)
+        } else {
+            end
+        };
+
+        let mut i = left.wrapping_sub(1);
+        let mut j = right.wrapping_add(1);
 
         loop {
-            j = j.wrapping_sub(1);
-            if values[j] <= pivot {
+            loop {
+                i = i.wrapping_add(1);
+                if values[i] >= pivot {
+                    break;
+                }
+            }
+
+            loop {
+                j = j.wrapping_sub(1);
+                if values[j] <= pivot {
+                    break;
+                }
+            }
+
+            if i >= j {
                 break;
             }
+
+            swap(values, boxes, indices, i, j);
         }
 
-        if i >= j {
-            break;
+        // Recurse into the smaller partition, loop on the larger one.
+        // This bounds the recursion depth to O(log n).
+        if j - left < right - j {
+            sort(values, boxes, indices, left, j, node_size);
+            left = j.wrapping_add(1);
+        } else {
+            sort(values, boxes, indices, j.wrapping_add(1), right, node_size);
+            right = j;
         }
-
-        swap(values, boxes, indices, i, j);
     }
-
-    sort(values, boxes, indices, left, j, node_size);
-    sort(values, boxes, indices, j.wrapping_add(1), right, node_size);
 }

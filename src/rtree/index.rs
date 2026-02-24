@@ -266,4 +266,51 @@ mod tests {
 
         index.search(-100., -1., 15000., 1.);
     }
+
+    #[test]
+    // https://github.com/apache/sedona-db/issues/659
+    // The quicksort used by HilbertSort and STRSort can reach O(n) recursion
+    // depth in the worst case, causing a stack overflow for large inputs. The
+    // tail-call optimization bounds recursion depth to O(log n).
+    fn quicksort_should_not_stackoverflow_with_large_input() {
+        _quicksort_should_not_stackoverflow_with_large_input::<HilbertSort>();
+        _quicksort_should_not_stackoverflow_with_large_input::<STRSort>();
+    }
+
+    fn _quicksort_should_not_stackoverflow_with_large_input<S: Sort<f64> + Send + 'static>() {
+        // Use a thread with a small stack to make the test fail reliably
+        // without needing a huge number of items.
+        let result = std::thread::Builder::new()
+            .stack_size(512 * 1024) // 512 KB
+            .spawn(|| {
+                let n: u32 = 20_000;
+                let mut builder = RTreeBuilder::<f64>::new(n);
+
+                // Points along x=0 with a handful of outliers. This creates
+                // a distribution of sort values (hilbert or x-center) where
+                // the median-of-three pivot consistently picks the majority
+                // value, producing maximally skewed partitions.
+                for i in 0..n {
+                    let x = if i % 1000 == 0 { i as f64 * 100.0 } else { 0.0 };
+                    builder.add(x, i as f64, x + 1.0, i as f64 + 1.0);
+                }
+
+                let tree = builder.finish::<S>();
+
+                // Sanity-check the tree is usable after building.
+                let results = tree.search(-1.0, -1.0, 1.0, 20001.0);
+                assert!(
+                    results.len() > 19_000,
+                    "expected most items to fall within the query window"
+                );
+            })
+            .unwrap()
+            .join();
+
+        assert!(
+            result.is_ok(),
+            "R-tree construction overflowed the stack: {:?}",
+            result.unwrap_err()
+        );
+    }
 }
