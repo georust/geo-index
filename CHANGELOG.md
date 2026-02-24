@@ -2,6 +2,12 @@
 
 **This is the changelog for the core Rust library**. There's a [separate changelog](./python/CHANGELOG.md) for the Python bindings.
 
+## Unreleased
+
+### Bug fixes
+
+- Fix stack overflow in HilbertSort and STRSort quicksort with large datasets by @pbo-linmr in https://github.com/georust/geo-index/pull/157
+
 ## [0.3.3] - 2026-02-11
 
 ## Bug fixes
