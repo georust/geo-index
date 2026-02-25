@@ -1,6 +1,6 @@
 use crate::indices::MutableIndices;
 use crate::r#type::IndexableNum;
-use crate::rtree::sort::util::swap;
+use crate::rtree::sort::util::{apply_permutation, k_block_sort_by};
 use crate::rtree::sort::{Sort, SortParams};
 
 /// An implementation of hilbert sorting.
@@ -13,15 +13,17 @@ pub struct HilbertSort;
 
 impl<N: IndexableNum> Sort<N> for HilbertSort {
     fn sort(params: &mut SortParams<N>, boxes: &mut [N], indices: &mut MutableIndices) {
-        let width = params.max_x - params.min_x; // || 1.0;
-        let height = params.max_y - params.min_y; // || 1.0;
-        let mut hilbert_values: Vec<u32> = Vec::with_capacity(params.num_items);
+        let width = params.max_x - params.min_x;
+        let height = params.max_y - params.min_y;
         let hilbert_max = ((1 << 16) - 1) as f64;
 
+        // Build packed (hilbert_value, original_index) as u64.
+        // High 32 bits = hilbert value, low 32 bits = original index.
+        // Natural u64 ordering sorts by hilbert value first, index as tiebreaker.
+        let mut packed: Vec<u64> = Vec::with_capacity(params.num_items);
         {
-            // map item centers into Hilbert coordinate space and calculate Hilbert values
             let mut pos = 0;
-            for _ in 0..params.num_items {
+            for i in 0..params.num_items {
                 let min_x = boxes[pos];
                 pos += 1;
                 let min_y = boxes[pos];
@@ -39,89 +41,17 @@ impl<N: IndexableNum> Sort<N> for HilbertSort {
                     * ((min_y + max_y).to_f64().unwrap() / 2. - params.min_y.to_f64().unwrap())
                     / height.to_f64().unwrap())
                 .floor() as u32;
-                hilbert_values.push(hilbert(x, y));
+
+                packed.push(((hilbert(x, y) as u64) << 32) | (i as u64));
             }
         }
 
-        // sort items by their Hilbert value (for packing later)
-        sort(
-            &mut hilbert_values,
-            boxes,
-            indices,
-            0,
-            params.num_items - 1,
-            params.node_size,
-        );
-    }
-}
+        // k-block sort by natural u64 ordering (hilbert value in high bits)
+        k_block_sort_by(&mut packed, params.node_size, |a, b| a.cmp(b));
 
-/// Custom quicksort that partially sorts bbox data alongside the hilbert values.
-// Partially taken from static_aabb2d_index under the MIT/Apache license
-fn sort<N: IndexableNum>(
-    values: &mut [u32],
-    boxes: &mut [N],
-    indices: &mut MutableIndices,
-    mut left: usize,
-    mut right: usize,
-    node_size: usize,
-) {
-    loop {
-        debug_assert!(left <= right);
-
-        if left / node_size >= right / node_size {
-            return;
-        }
-
-        // apply median of three method
-        let start = values[left];
-        let mid = values[(left + right) >> 1];
-        let end = values[right];
-
-        let x = start.max(mid);
-        let pivot = if end > x {
-            x
-        } else if x == start {
-            mid.max(end)
-        } else if x == mid {
-            start.max(end)
-        } else {
-            end
-        };
-
-        let mut i = left.wrapping_sub(1);
-        let mut j = right.wrapping_add(1);
-
-        loop {
-            loop {
-                i = i.wrapping_add(1);
-                if values[i] >= pivot {
-                    break;
-                }
-            }
-
-            loop {
-                j = j.wrapping_sub(1);
-                if values[j] <= pivot {
-                    break;
-                }
-            }
-
-            if i >= j {
-                break;
-            }
-
-            swap(values, boxes, indices, i, j);
-        }
-
-        // Recurse into the smaller partition, loop on the larger one.
-        // This bounds the recursion depth to O(log n).
-        if j - left < right - j {
-            sort(values, boxes, indices, left, j, node_size);
-            left = j.wrapping_add(1);
-        } else {
-            sort(values, boxes, indices, j.wrapping_add(1), right, node_size);
-            right = j;
-        }
+        // Extract permutation from low 32 bits and apply to boxes + indices
+        let mut perm: Vec<u32> = packed.iter().map(|&v| (v & 0xFFFF_FFFF) as u32).collect();
+        apply_permutation(&mut perm, boxes, indices);
     }
 }
 
