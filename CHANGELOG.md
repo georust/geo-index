@@ -6,7 +6,7 @@
 
 ### Bug fixes
 
-- Fix stack overflow in HilbertSort and STRSort quicksort with large datasets by @pbo-linmr in https://github.com/georust/geo-index/pull/157
+- Replace custom quicksort with `select_nth_unstable_by` in HilbertSort and STRSort to fix stack overflow with large datasets by @Kontinuation in https://github.com/georust/geo-index/pull/157
 
 ## [0.3.3] - 2026-02-11
 
