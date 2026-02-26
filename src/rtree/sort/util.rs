@@ -50,6 +50,54 @@ where
     do_k_block_sort_by(right, k, compare);
 }
 
+/// Abstraction over permutation storage used by [`apply_permutation`].
+///
+/// Implementations represent a mapping where position `i` stores the original
+/// index of the element that should be moved to `i`.
+///
+/// This allows reusing the same cycle-following permutation logic for both a
+/// plain permutation buffer (`Vec<u32>`) and packed sort buffers
+/// (`Vec<(u32, u32)>`) without extra allocation.
+pub(super) trait PermIndices {
+    fn len(&self) -> usize;
+    fn get(&self, i: usize) -> u32;
+    fn set(&mut self, i: usize, v: u32);
+}
+
+impl PermIndices for &mut [u32] {
+    #[inline]
+    fn len(&self) -> usize {
+        <[u32]>::len(self)
+    }
+
+    #[inline]
+    fn get(&self, i: usize) -> u32 {
+        self[i]
+    }
+
+    #[inline]
+    fn set(&mut self, i: usize, v: u32) {
+        self[i] = v;
+    }
+}
+
+impl<T> PermIndices for &mut [(T, u32)] {
+    #[inline]
+    fn len(&self) -> usize {
+        <[(T, u32)]>::len(self)
+    }
+
+    #[inline]
+    fn get(&self, i: usize) -> u32 {
+        self[i].1
+    }
+
+    #[inline]
+    fn set(&mut self, i: usize, v: u32) {
+        self[i].1 = v;
+    }
+}
+
 /// Apply a permutation to `boxes` and `indices` using cycle-following.
 ///
 /// `perm[i]` is the original index of the element that should end up at position `i`.
@@ -58,8 +106,8 @@ where
 ///
 /// Time: O(n), each element moved exactly once.
 /// Extra space: O(1) beyond the `perm` array.
-pub(super) fn apply_permutation<N: IndexableNum>(
-    perm: &mut [u32],
+pub(super) fn apply_permutation<N: IndexableNum, P: PermIndices>(
+    perm: P,
     boxes: &mut [N],
     indices: &mut MutableIndices,
 ) {
@@ -69,16 +117,14 @@ pub(super) fn apply_permutation<N: IndexableNum>(
     }
 }
 
-fn do_apply_permutation<N: IndexableNum, I: Copy>(
-    perm: &mut [u32],
+fn do_apply_permutation<N: IndexableNum, I: Copy, P: PermIndices>(
+    mut perm: P,
     boxes: &mut [N],
     indices: &mut [I],
 ) {
     let n = perm.len();
-    assert!(boxes.len() >= n * 4);
-    assert!(indices.len() >= n);
     for i in 0..n {
-        if perm[i] as usize == i {
+        if perm.get(i) as usize == i {
             continue; // already in place
         }
 
@@ -89,8 +135,8 @@ fn do_apply_permutation<N: IndexableNum, I: Copy>(
 
         let mut j = i;
         loop {
-            let k = perm[j] as usize;
-            perm[j] = j as u32; // mark as done
+            let k = perm.get(j) as usize;
+            perm.set(j, j as u32); // mark as done
 
             if k == i {
                 // End of cycle: place the saved item at position j
@@ -286,7 +332,8 @@ mod test {
             let perm_copy = perm.clone();
 
             apply_permutation(
-                &mut perm,
+                // &mut perm,
+                perm.as_mut_slice(),
                 &mut boxes,
                 &mut MutableIndices::U16(&mut indices),
             );
@@ -304,7 +351,7 @@ mod test {
             let perm_copy = perm.clone();
 
             apply_permutation(
-                &mut perm,
+                perm.as_mut_slice(),
                 &mut boxes,
                 &mut MutableIndices::U16(&mut indices),
             );
@@ -323,7 +370,7 @@ mod test {
         let perm_copy = perm.clone();
 
         apply_permutation(
-            &mut perm,
+            perm.as_mut_slice(),
             &mut boxes,
             &mut MutableIndices::U16(&mut indices),
         );
@@ -343,7 +390,7 @@ mod test {
         let perm_copy = perm.clone();
 
         apply_permutation(
-            &mut perm,
+            perm.as_mut_slice(),
             &mut boxes,
             &mut MutableIndices::U32(&mut u32_indices),
         );
@@ -358,6 +405,29 @@ mod test {
     }
 
     #[test]
+    fn apply_permutation_from_packed_pairs() {
+        let n = 10;
+        let (orig_boxes, orig_indices) = make_test_data(n);
+        let (mut boxes, mut indices) = (orig_boxes.clone(), orig_indices.clone());
+
+        let perm: Vec<u32> = (0..n as u32).rev().collect();
+        let mut packed: Vec<(u32, u32)> = perm
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(i, p)| (i as u32, p))
+            .collect();
+
+        apply_permutation(
+            packed.as_mut_slice(),
+            &mut boxes,
+            &mut MutableIndices::U16(&mut indices),
+        );
+
+        verify_permutation_result(&perm, &boxes, &indices, &orig_boxes, &orig_indices);
+    }
+
+    #[test]
     fn apply_permutation_random_fuzz() {
         for seed in 1..=20u64 {
             let mut rng = StdRng::seed_from_u64(seed);
@@ -369,7 +439,7 @@ mod test {
                 let perm_copy = perm.clone();
 
                 apply_permutation(
-                    &mut perm,
+                    perm.as_mut_slice(),
                     &mut boxes,
                     &mut MutableIndices::U16(&mut indices),
                 );

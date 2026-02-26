@@ -1,3 +1,6 @@
+use std::cmp::Ordering;
+use std::ops::Range;
+
 #[cfg(feature = "rayon")]
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
@@ -17,97 +20,111 @@ impl<N: IndexableNum> Sort<N> for STRSort {
     fn sort(params: &mut SortParams<N>, boxes: &mut [N], indices: &mut MutableIndices) {
         let two = N::from(2).unwrap();
 
-        // --- Phase 1: Sort all items by x-center ---
-        {
-            // Compute x-center values
-            let center_x: Vec<N> = (0..params.num_items)
-                .map(|i| {
-                    let min_x = boxes[i * 4];
-                    let max_x = boxes[(i * 4) + 2];
-                    (min_x + max_x) / two
-                })
-                .collect();
-
-            // Build index array [0, 1, 2, ..., n-1]
-            let mut order: Vec<u32> = (0..params.num_items as u32).collect();
-
-            // k-block sort indices by x-center
-            k_block_sort_by(&mut order, params.node_size, |&a, &b| {
-                partial_cmp_unwrap(center_x[a as usize], center_x[b as usize])
-            });
-
-            // Apply permutation to boxes and indices
-            apply_permutation(&mut order, boxes, indices);
-        }
-
-        // --- Phase 2: Within each vertical slice, sort by y-center ---
+        // Compute the number of vertical slices to create, and the number of items per slice.
+        // The number of items per slice must be multiple of the node size to ensure that
+        // no nodes will span multiple slices when we group items into nodes later.
         let num_leaf_nodes = (params.num_items as f64 / params.node_size as f64).ceil();
         let num_vertical_slices = num_leaf_nodes.sqrt().ceil() as usize;
-        let num_items_per_slice =
-            (params.num_items as f64 / num_vertical_slices as f64).ceil() as usize;
+        let num_items_per_slice = num_vertical_slices * params.node_size;
 
-        // Chunk ONLY the item portion of boxes and indices into slices.
-        // boxes/indices contain tree node data beyond num_items that must not be touched.
-        let item_boxes = &mut boxes[..params.num_items * 4];
-        let box_chunks: Vec<&mut [N]> = item_boxes.chunks_mut(num_items_per_slice * 4).collect();
-        let (mut item_indices, _) = indices.split_at_mut(params.num_items);
-        let index_chunks = item_indices.chunks_mut(num_items_per_slice);
+        // We'll reuse the same buffer first for the x coordinate of the centers and then for the y
+        // coordinate.
+        let mut center_with_indices: Vec<(N, u32)> = Vec::with_capacity(params.num_items);
 
-        let node_size = params.node_size;
+        // Get x value of box centers
+        for i in 0..params.num_items {
+            let min_x = boxes[i * 4];
+            let max_x = boxes[(i * 4) + 2];
+            let center_x = (min_x + max_x) / two;
+            center_with_indices.push((center_x, 0));
+        }
+
+        // Sort items by their x values
+        sort(
+            &mut center_with_indices,
+            boxes,
+            indices,
+            0..params.num_items,
+            num_items_per_slice,
+        );
+
+        center_with_indices.clear();
+
+        // Get y value of box centers
+        for i in 0..params.num_items {
+            let min_y = boxes[(i * 4) + 1];
+            let max_y = boxes[(i * 4) + 3];
+            let center_y = (min_y + max_y) / two;
+            center_with_indices.push((center_y, 0));
+        }
 
         #[cfg(feature = "rayon")]
         {
-            box_chunks.into_par_iter().zip(index_chunks).for_each(
-                |(box_chunk, mut index_chunk)| {
-                    sort_slice_by_y(box_chunk, &mut index_chunk, node_size, two);
-                },
-            );
+            let center_slices = center_with_indices
+                .chunks_mut(num_items_per_slice)
+                .collect::<Vec<_>>();
+            let boxes_slices = boxes
+                .chunks_mut(num_items_per_slice * 4)
+                .collect::<Vec<_>>();
+            let indices_slices = indices.chunks_mut(num_items_per_slice);
+
+            center_slices
+                .into_par_iter()
+                .zip(boxes_slices)
+                .zip(indices_slices)
+                .for_each(|((center_chunk, boxes_chunk), mut indices_chunk)| {
+                    // Within each x partition, sort by y values
+                    // If the last slice, it won't be a full node
+                    let chunk_len = center_chunk.len();
+                    sort(
+                        center_chunk,
+                        boxes_chunk,
+                        &mut indices_chunk,
+                        0..chunk_len,
+                        params.node_size,
+                    );
+                })
         }
 
         #[cfg(not(feature = "rayon"))]
         {
-            for (box_chunk, mut index_chunk) in box_chunks.into_iter().zip(index_chunks) {
-                sort_slice_by_y(box_chunk, &mut index_chunk, node_size, two);
+            for partition_start in (0..params.num_items).step_by(num_items_per_slice) {
+                let partition_end = (partition_start + num_items_per_slice).min(params.num_items);
+                // Within each x partition, sort by y values
+                sort(
+                    &mut center_with_indices,
+                    boxes,
+                    indices,
+                    partition_start..partition_end,
+                    params.node_size,
+                );
             }
         }
     }
 }
 
-/// Sort a single vertical slice by y-center using k-block sort + permutation.
-fn sort_slice_by_y<N: IndexableNum>(
-    box_chunk: &mut [N],
-    index_chunk: &mut MutableIndices,
+/// Sorts the given range of items in `center_with_indices` and applies the same permutation to
+/// `boxes` and `indices`.
+fn sort<N: IndexableNum>(
+    center_with_indices: &mut [(N, u32)],
+    boxes: &mut [N],
+    indices: &mut MutableIndices,
+    range: Range<usize>,
     node_size: usize,
-    two: N,
 ) {
-    let slice_items = box_chunk.len() / 4;
-    if slice_items <= 1 {
-        return;
+    let center_with_indices = &mut center_with_indices[range.clone()];
+    for (idx, val) in center_with_indices.iter_mut().enumerate() {
+        val.1 = idx as u32;
     }
 
-    // Compute y-center values for this slice
-    let center_y: Vec<N> = (0..slice_items)
-        .map(|j| {
-            let min_y = box_chunk[(j * 4) + 1];
-            let max_y = box_chunk[(j * 4) + 3];
-            (min_y + max_y) / two
-        })
-        .collect();
+    let boxes = &mut boxes[range.start * 4..range.end * 4];
+    let mut indices = match indices {
+        MutableIndices::U16(arr) => MutableIndices::U16(&mut arr[range]),
+        MutableIndices::U32(arr) => MutableIndices::U32(&mut arr[range]),
+    };
 
-    // Build local index array
-    let mut order: Vec<u32> = (0..slice_items as u32).collect();
-
-    // k-block sort by y-center
-    k_block_sort_by(&mut order, node_size, |&a, &b| {
-        partial_cmp_unwrap(center_y[a as usize], center_y[b as usize])
+    k_block_sort_by(center_with_indices, node_size, |&a, &b| {
+        a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal)
     });
-
-    // Apply permutation to box and index slices
-    apply_permutation(&mut order, box_chunk, index_chunk);
-}
-
-/// Compare two `PartialOrd` values, treating incomparable (NaN) as equal.
-#[inline]
-fn partial_cmp_unwrap<N: PartialOrd>(a: N, b: N) -> std::cmp::Ordering {
-    a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
+    apply_permutation(center_with_indices, boxes, &mut indices);
 }

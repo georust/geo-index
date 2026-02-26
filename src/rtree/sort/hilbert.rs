@@ -17,10 +17,8 @@ impl<N: IndexableNum> Sort<N> for HilbertSort {
         let height = params.max_y - params.min_y;
         let hilbert_max = ((1 << 16) - 1) as f64;
 
-        // Build packed (hilbert_value, original_index) as u64.
-        // High 32 bits = hilbert value, low 32 bits = original index.
-        // Natural u64 ordering sorts by hilbert value first, index as tiebreaker.
-        let mut packed: Vec<u64> = Vec::with_capacity(params.num_items);
+        // Build packed tuples as (hilbert_value, original_index).
+        let mut hilbert_values_with_indices: Vec<(u32, u32)> = Vec::with_capacity(params.num_items);
         {
             let mut pos = 0;
             for i in 0..params.num_items {
@@ -42,16 +40,17 @@ impl<N: IndexableNum> Sort<N> for HilbertSort {
                     / height.to_f64().unwrap())
                 .floor() as u32;
 
-                packed.push(((hilbert(x, y) as u64) << 32) | (i as u64));
+                hilbert_values_with_indices.push((hilbert(x, y), (i as u32)));
             }
         }
 
-        // k-block sort by natural u64 ordering (hilbert value in high bits)
-        k_block_sort_by(&mut packed, params.node_size, |a, b| a.cmp(b));
-
-        // Extract permutation from low 32 bits and apply to boxes + indices
-        let mut perm: Vec<u32> = packed.iter().map(|&v| (v & 0xFFFF_FFFF) as u32).collect();
-        apply_permutation(&mut perm, boxes, indices);
+        // sort items by their Hilbert value (for packing later)
+        k_block_sort_by(
+            &mut hilbert_values_with_indices,
+            params.node_size,
+            |a, b| a.0.cmp(&b.0),
+        );
+        apply_permutation(hilbert_values_with_indices.as_mut_slice(), boxes, indices);
     }
 }
 
