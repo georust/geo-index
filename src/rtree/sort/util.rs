@@ -61,7 +61,6 @@ where
 pub(super) trait PermIndices {
     fn len(&self) -> usize;
     fn get(&self, i: usize) -> u32;
-    fn set(&mut self, i: usize, v: u32);
 }
 
 impl PermIndices for &mut [u32] {
@@ -74,11 +73,6 @@ impl PermIndices for &mut [u32] {
     fn get(&self, i: usize) -> u32 {
         self[i]
     }
-
-    #[inline]
-    fn set(&mut self, i: usize, v: u32) {
-        self[i] = v;
-    }
 }
 
 impl<T> PermIndices for &mut [(T, u32)] {
@@ -90,11 +84,6 @@ impl<T> PermIndices for &mut [(T, u32)] {
     #[inline]
     fn get(&self, i: usize) -> u32 {
         self[i].1
-    }
-
-    #[inline]
-    fn set(&mut self, i: usize, v: u32) {
-        self[i].1 = v;
     }
 }
 
@@ -118,49 +107,27 @@ pub(super) fn apply_permutation<N: IndexableNum, P: PermIndices>(
 }
 
 fn do_apply_permutation<N: IndexableNum, I: Copy, P: PermIndices>(
-    mut perm: P,
+    perm: P,
     boxes: &mut [N],
     indices: &mut [I],
 ) {
     let n = perm.len();
+
+    let mut new_boxes: Vec<N> = Vec::with_capacity(n * 4);
+    let mut new_indices: Vec<I> = Vec::with_capacity(n);
+
     for i in 0..n {
-        if perm.get(i) as usize == i {
-            continue; // already in place
-        }
-
-        // Save the item currently at position i
-        let bi = i * 4;
-        let saved_box = [boxes[bi], boxes[bi + 1], boxes[bi + 2], boxes[bi + 3]];
-        let saved_index = indices[i];
-
-        let mut j = i;
-        loop {
-            let k = perm.get(j) as usize;
-            perm.set(j, j as u32); // mark as done
-
-            if k == i {
-                // End of cycle: place the saved item at position j
-                let bj = j * 4;
-                boxes[bj] = saved_box[0];
-                boxes[bj + 1] = saved_box[1];
-                boxes[bj + 2] = saved_box[2];
-                boxes[bj + 3] = saved_box[3];
-                indices[j] = saved_index;
-                break;
-            }
-
-            // Move item from position k to position j
-            let bj = j * 4;
-            let bk = k * 4;
-            boxes[bj] = boxes[bk];
-            boxes[bj + 1] = boxes[bk + 1];
-            boxes[bj + 2] = boxes[bk + 2];
-            boxes[bj + 3] = boxes[bk + 3];
-            indices[j] = indices[k];
-
-            j = k;
-        }
+        let src = perm.get(i) as usize;
+        let bs = src * 4;
+        new_boxes.push(boxes[bs]);
+        new_boxes.push(boxes[bs + 1]);
+        new_boxes.push(boxes[bs + 2]);
+        new_boxes.push(boxes[bs + 3]);
+        new_indices.push(indices[src]);
     }
+
+    boxes[..n * 4].copy_from_slice(&new_boxes);
+    indices[..n].copy_from_slice(&new_indices);
 }
 
 #[cfg(test)]
