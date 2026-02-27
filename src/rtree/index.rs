@@ -270,7 +270,7 @@ mod tests {
     #[test]
     // https://github.com/apache/sedona-db/issues/659
     // The original quicksort used by HilbertSort and STRSort could have reached
-    // O(n) recursion depth in the worst case, causing a stack overflow for large inputs. 
+    // O(n) recursion depth in the worst case, causing a stack overflow for large inputs.
     // The new implementation bounds recursion depth to ceil(log2(n/k)).
     fn quicksort_should_not_stackoverflow_with_large_input() {
         _quicksort_should_not_stackoverflow_with_large_input::<HilbertSort>();

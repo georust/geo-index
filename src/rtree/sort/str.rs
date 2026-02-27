@@ -24,8 +24,10 @@ impl<N: IndexableNum> Sort<N> for STRSort {
         // The number of items per slice must be multiple of the node size to ensure that
         // no nodes will span multiple slices when we group items into nodes later.
         let num_leaf_nodes = (params.num_items as f64 / params.node_size as f64).ceil();
-        let num_vertical_slices = num_leaf_nodes.sqrt().ceil() as usize;
-        let num_items_per_slice = num_vertical_slices * params.node_size;
+        let num_items_per_slice = {
+            let num_vertical_slices = num_leaf_nodes.sqrt().ceil() as usize;
+            num_vertical_slices * params.node_size
+        };
 
         // We'll reuse the same buffer first for the x coordinate of the centers and then for the y
         // coordinate.
