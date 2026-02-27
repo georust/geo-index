@@ -1,6 +1,6 @@
 [package]
 name = "geo-index"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["Kyle Barron <kylebarron2@gmail.com>"]
 edition = "2021"
 rust-version = "1.75"
