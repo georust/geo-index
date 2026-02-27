@@ -8,6 +8,8 @@ use crate::IndexableNum;
 ///
 /// Uses [`select_nth_unstable_by`] under the hood, which is O(n) per level.
 /// Total work: O(n log(n/k)). Max recursion depth: ceil(log2(n/k)).
+/// This is a Rust standard-library approach to an upstream update that migrated
+/// the Hilbert sort to a non-recursive algorithm: https://github.com/mourner/flatbush/pull/70
 ///
 /// [`select_nth_unstable_by`]: slice::select_nth_unstable_by
 pub(super) fn k_block_sort_by<T, F>(arr: &mut [T], k: usize, mut compare: F)
