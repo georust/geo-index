@@ -368,7 +368,7 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
                     break 'outer;
                 }
 
-                // If we've reached k items and not including tie breakers, check if we should stop
+                // If we've reached k items and not including tie breakers, we should stop
                 if !include_tie_breakers && k.is_some_and(|k_val| results.len() == k_val) {
                     break 'outer;
                 }
