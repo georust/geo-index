@@ -173,6 +173,89 @@ pub trait KDTreeIndex<N: IndexableNum>: Sized {
         result
     }
 
+    /// Search the index for closest points. If ties returns multiple
+    ///
+    /// - qx: x value of query point
+    /// - qy: y value of query point
+    ///
+    /// Returns distance squared and indices of found items
+    fn query(&self, qx: N, qy: N) -> (N, Vec<u32>) {
+        let indices = self.indices();
+        let coords = self.coords();
+        let node_size = self.node_size();
+
+        // Use TinyVec to avoid heap allocations
+        let mut stack: TinyVec<[usize; 33]> = TinyVec::new();
+        stack.push(0);
+        stack.push(indices.len() - 1);
+        stack.push(0);
+
+        let mut result: Vec<u32> = vec![];
+        let mut min_val = N::max_value();
+
+        // recursively search for items within radius in the kd-sorted arrays
+        while !stack.is_empty() {
+            let axis = stack.pop().unwrap_or(0);
+            let right = stack.pop().unwrap_or(0);
+            let left = stack.pop().unwrap_or(0);
+
+            // if we reached "tree node", search linearly
+            if right - left <= node_size as usize {
+                for i in left..=right {
+                    let d = sq_dist(coords[2 * i], coords[2 * i + 1], qx, qy);
+                    if d < min_val {
+                        result.clear();
+                        result.push(indices.get(i).try_into().unwrap());
+                        min_val = d;
+                    } else if d == min_val {
+                        result.push(indices.get(i).try_into().unwrap());
+                    }
+                }
+                continue;
+            }
+
+            // otherwise find the middle index
+            let m = (left + right) >> 1;
+
+            // include the middle item if it's in range
+            let x = coords[2 * m];
+            let y = coords[2 * m + 1];
+            let d = sq_dist(x, y, qx, qy);
+            if d < min_val {
+                result.clear();
+                result.push(indices.get(m).try_into().unwrap());
+                min_val = d;
+            } else if d == min_val {
+                result.push(indices.get(m).try_into().unwrap());
+            }
+
+            // queue search in halves that intersect the query
+            let lte = if axis == 0 {
+                qx - min_val <= x
+            } else {
+                qy - min_val <= y
+            };
+            if lte {
+                stack.push(left);
+                stack.push(m - 1);
+                stack.push(1 - axis);
+            }
+
+            let gte = if axis == 0 {
+                qx + min_val >= x
+            } else {
+                qy + min_val >= y
+            };
+            if gte {
+                stack.push(m + 1);
+                stack.push(right);
+                stack.push(1 - axis);
+            }
+        }
+        let d = min_val.sqrt().unwrap();
+        (d, result)
+    }
+
     /// Search the index for items within a given radius.
     ///
     /// - coord: coordinate of query point
