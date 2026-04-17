@@ -66,5 +66,5 @@ pub mod util;
 
 pub use builder::{RTreeBuilder, DEFAULT_RTREE_NODE_SIZE};
 pub use index::{RTree, RTreeMetadata, RTreeRef};
-pub use r#trait::{RTreeIndex, SimpleDistanceMetric};
+pub use r#trait::{NeighborsOptions, RTreeIndex, SimpleDistanceMetric};
 pub use traversal::Node;

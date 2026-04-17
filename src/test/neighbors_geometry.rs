@@ -5,7 +5,7 @@
 
 use crate::rtree::distance::{EuclideanDistance, SliceGeometryAccessor};
 use crate::rtree::sort::HilbertSort;
-use crate::rtree::{RTreeBuilder, RTreeIndex};
+use crate::rtree::{NeighborsOptions, RTreeBuilder, RTreeIndex};
 use geo_0_31::algorithm::{BoundingRect, Distance, Euclidean};
 use geo_0_31::{coord, Coord, Geometry, LineString, Point, Polygon, Rect};
 use rand::rngs::StdRng;
@@ -137,19 +137,17 @@ fn verify_neighbors_geometry(
     let metric = EuclideanDistance;
     let accessor = SliceGeometryAccessor::new(indexed_geometries);
 
-    // Get results from neighbors_geometry
-    let rtree_results = tree.neighbors_geometry(query_geometry, Some(k), None, &metric, &accessor);
+    // Get results from neighbors_geometry - now returns Vec<(u32, f64)>
+    let rtree_results =
+        tree.neighbors_geometry(query_geometry, NeighborsOptions::k(k), &metric, &accessor);
 
     // Get ground truth
     let ground_truth = compute_knn_ground_truth(query_geometry, indexed_geometries, k);
 
-    // Compute distances for rtree results
+    // Compute distances for rtree results - distances are already included!
     let rtree_with_distances: Vec<(usize, f64)> = rtree_results
         .iter()
-        .map(|&idx| {
-            let dist = Euclidean.distance(query_geometry, &indexed_geometries[idx as usize]);
-            (idx as usize, dist)
-        })
+        .map(|&(idx, dist)| (idx as usize, dist))
         .collect();
 
     // Check that results are in non-decreasing distance order
@@ -193,8 +191,10 @@ fn verify_neighbors_geometry(
 
     // Verify that all returned items are among the true K nearest neighbors
     // (allowing for ties at the boundary)
-    let rtree_indices: std::collections::HashSet<usize> =
-        rtree_results.iter().map(|&idx| idx as usize).collect();
+    let rtree_indices: std::collections::HashSet<usize> = rtree_results
+        .iter()
+        .map(|&(idx, _dist)| idx as usize)
+        .collect();
 
     // Check that all rtree results have distances <= K-th distance
     for (idx, dist) in &rtree_with_distances {
@@ -360,14 +360,18 @@ fn test_neighbors_geometry_k_larger_than_dataset() {
     let accessor = SliceGeometryAccessor::new(&indexed_geometries);
 
     // Request 10 neighbors but only 5 are available
-    let rtree_results = tree.neighbors_geometry(&query_geom, Some(10), None, &metric, &accessor);
+    let rtree_results =
+        tree.neighbors_geometry(&query_geom, NeighborsOptions::k(10), &metric, &accessor);
     let ground_truth = compute_knn_ground_truth(&query_geom, &indexed_geometries, 10);
 
     assert_eq!(rtree_results.len(), 5);
     assert_eq!(rtree_results.len(), ground_truth.len());
 
     let ground_truth_indices: Vec<usize> = ground_truth.iter().map(|(idx, _)| *idx).collect();
-    let rtree_indices: Vec<usize> = rtree_results.iter().map(|&idx| idx as usize).collect();
+    let rtree_indices: Vec<usize> = rtree_results
+        .iter()
+        .map(|&(idx, _dist)| idx as usize)
+        .collect();
     assert_eq!(rtree_indices, ground_truth_indices);
 }
 
@@ -385,11 +389,15 @@ fn test_neighbors_geometry_with_max_distance() {
         let metric = EuclideanDistance;
         let accessor = SliceGeometryAccessor::new(&indexed_geometries);
 
-        let rtree_results =
-            tree.neighbors_geometry(&query_geom, None, Some(max_distance), &metric, &accessor);
+        let rtree_results = tree.neighbors_geometry(
+            &query_geom,
+            NeighborsOptions::all().max_distance(max_distance),
+            &metric,
+            &accessor,
+        );
 
         // Verify all returned results are within max_distance
-        for &idx in &rtree_results {
+        for &(idx, _dist) in &rtree_results {
             let dist = Euclidean.distance(&query_geom, &indexed_geometries[idx as usize]);
             assert!(
                 dist <= max_distance,
@@ -405,7 +413,7 @@ fn test_neighbors_geometry_with_max_distance() {
             let dist = Euclidean.distance(&query_geom, geom);
             if dist <= max_distance {
                 assert!(
-                    rtree_results.contains(&(idx as u32)),
+                    rtree_results.iter().any(|&(result_idx, _dist)| result_idx == idx as u32),
                     "Geometry at index {} with distance {} should be in results but isn't (seed={})",
                     idx, dist, seed
                 );
@@ -434,6 +442,58 @@ fn test_neighbors_empty_tree_returns_empty() {
 
     let results = tree.neighbors(50.0, 50.0, Some(10), None);
     assert!(results.is_empty());
+
+    let results = tree.neighbors(50.0, 50.0, None, Some(100.0));
+    assert!(results.is_empty());
+}
+
+#[test]
+fn test_neighbors_coord_empty_tree_returns_empty() {
+    use geo_traits::CoordTrait;
+
+    let builder = RTreeBuilder::<f64>::new(0);
+    let tree = builder.finish::<HilbertSort>();
+
+    struct TestCoord {
+        x: f64,
+        y: f64,
+    }
+    impl CoordTrait for TestCoord {
+        type T = f64;
+        fn x(&self) -> f64 {
+            self.x
+        }
+        fn y(&self) -> f64 {
+            self.y
+        }
+        fn dim(&self) -> geo_traits::Dimensions {
+            geo_traits::Dimensions::Xy
+        }
+        fn nth_or_panic(&self, n: usize) -> Self::T {
+            match n {
+                0 => self.x,
+                1 => self.y,
+                _ => panic!("Invalid dimension"),
+            }
+        }
+    }
+
+    let coord = TestCoord { x: 50.0, y: 50.0 };
+    let results = tree.neighbors_coord(&coord, None, None);
+    assert!(results.is_empty());
+}
+
+#[test]
+fn test_neighbors_with_distance_empty_tree_returns_empty() {
+    let builder = RTreeBuilder::<f64>::new(0);
+    let tree = builder.finish::<HilbertSort>();
+
+    let metric = EuclideanDistance;
+    let results = tree.neighbors_with_distance(50.0, 50.0, NeighborsOptions::all(), &metric);
+    assert!(results.is_empty());
+
+    let results = tree.neighbors_with_distance(50.0, 50.0, NeighborsOptions::k(10), &metric);
+    assert!(results.is_empty());
 }
 
 #[test]
@@ -446,6 +506,17 @@ fn test_neighbors_geometry_empty_tree_returns_empty() {
     let accessor = SliceGeometryAccessor::new(&geometries);
     let query_geom = Geometry::Point(Point::new(50.0, 50.0));
 
-    let results = tree.neighbors_geometry(&query_geom, Some(10), None, &metric, &accessor);
+    let results = tree.neighbors_geometry(&query_geom, NeighborsOptions::all(), &metric, &accessor);
+    assert!(results.is_empty());
+
+    let results = tree.neighbors_geometry(&query_geom, NeighborsOptions::k(10), &metric, &accessor);
+    assert!(results.is_empty());
+
+    let results = tree.neighbors_geometry(
+        &query_geom,
+        NeighborsOptions::all().max_distance(100.0),
+        &metric,
+        &accessor,
+    );
     assert!(results.is_empty());
 }
