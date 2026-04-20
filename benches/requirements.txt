@@ -1,0 +1,4 @@
+geoindex-rs
+geopandas 
+pyogrio
+pyarrow

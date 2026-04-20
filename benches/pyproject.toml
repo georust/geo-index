@@ -1,0 +1,15 @@
+[project]
+name = "geo-index-benches"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+dependencies = [
+    "geoindex-rs",
+    "geopandas",
+    "pyogrio",
+    "pyarrow",
+    "numpy",
+    "requests",
+    "shapely",
+]
+
