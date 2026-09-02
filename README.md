@@ -25,6 +25,12 @@ A Rust crate and [Python library](https://kylebarron.dev/geo-index/latest/) for 
 - **Efficient bulk loading.** As an immutable index, _only_ bulk loading is supported.
 - Optional `rayon` feature for parallelizing part of the sort in the sort-tile-recursive (`STRSort`) method.
 
+## Custom ranked queries
+
+`RTreeIndex::neighbors_with_callbacks` ranks items using two callbacks: a lower bound on distance to an internal bounding box, and an exact distance to an item identified by its insertion index. The callbacks can capture any query or geometry storage and use planar, spherical, or other distance calculations. This API requires no optional feature or additional dependency. See its Rust API documentation for an example and the lower-bound requirements for correct ranking and pruning.
+
+The `use-geo_0_31` feature and its existing distance APIs remain available for compatibility. New integrations can use the callbacks with their preferred geometry library and version.
+
 ## Drawbacks
 
 - Trees are _immutable_. After creating the index, items can no longer be added or removed.
@@ -60,7 +66,7 @@ Currently, this library is used under the hood in [`geoarrow-rs`](https://github
 
 ## Future work
 
-- Geographic queries. Currently all queries are planar.
+- Built-in geographic query metrics and bounding-box lower bounds. Custom ranked queries can already supply these through callbacks.
 
 ## Benchmarks
 
