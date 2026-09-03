@@ -14,6 +14,7 @@ categories = ["data-structures", "algorithms", "science::geo"]
 
 [features]
 default = []
+# Retained for compatibility. New integrations can use RTreeIndex::neighbors_with_callbacks.
 use-geo_0_31 = ["geo_0_31"]
 
 [dependencies]

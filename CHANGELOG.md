@@ -8,6 +8,10 @@
 
 - BREAKING: Introduce `NeighborsOptions` struct and change signatures of `neighbors_with_simple_distance`, `neighbors_with_distance`, `neighbors_coord_with_distance`, and `neighbors_geometry` to accept `NeighborsOptions` instead of separate `max_results`/`max_distance` parameters, and return `Vec<(u32, N)>` instead of `Vec<u32>` to include distances with results. `NeighborsOptions` also adds support for tie breaker inclusion at rank k. by @Kontinuation in https://github.com/georust/geo-index/pull/154
 
+### Added
+
+- Add `RTreeIndex::neighbors_with_callbacks` for ranked queries with caller-defined item distances and bounding-box lower bounds, without enabling a geometry dependency. The existing `use-geo_0_31` APIs delegate to the callback implementation, including distance results and tie handling.
+
 ## [0.3.4] - 2026-02-27
 
 ### Bug fixes
