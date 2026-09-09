@@ -2,6 +2,11 @@
 //!
 //! This module provides different distance calculation methods for spatial queries,
 //! including Euclidean and Haversine distance calculations.
+//!
+//! This module is retained for compatibility with `geo` 0.31. For integrations
+//! with other versions or geometry libraries, use
+//! [`RTreeIndex::neighbors_with_callbacks`](crate::rtree::RTreeIndex::neighbors_with_callbacks),
+//! which requires no optional feature.
 
 use crate::r#type::IndexableNum;
 use crate::rtree::r#trait::{axis_dist, SimpleDistanceMetric};

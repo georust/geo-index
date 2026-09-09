@@ -301,6 +301,86 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
         options: NeighborsOptions<N>,
         distance_metric: &M,
     ) -> Vec<(u32, N)> {
+        self.neighbors_with_callbacks(
+            NeighborsOptions {
+                max_distance: Some(
+                    options
+                        .max_distance
+                        .unwrap_or(distance_metric.max_distance()),
+                ),
+                ..options
+            },
+            |[min_x, min_y, max_x, max_y]| {
+                distance_metric.distance_to_bbox(x, y, min_x, min_y, max_x, max_y)
+            },
+            |_, [min_x, min_y, max_x, max_y]| {
+                Some(distance_metric.distance_to_bbox(x, y, min_x, min_y, max_x, max_y))
+            },
+        )
+    }
+
+    /// Search items in increasing order of a caller-defined distance, without a geometry dependency.
+    ///
+    /// `bbox_distance` receives an internal node's bounding box as
+    /// `[min_x, min_y, max_x, max_y]` and must return a lower bound on the distance
+    /// to every item in that node. `item_distance` receives an item's original
+    /// insertion index and bounding box and returns its exact distance, or `None`
+    /// to exclude it. Both callbacks may capture the query and external geometry
+    /// storage, including data decoded on demand.
+    ///
+    /// Distances and `max_distance` must use the same units and ordering, and must
+    /// not be NaN. The distance type may differ from the tree's coordinate type.
+    /// The distance limit is inclusive; `None` uses the distance type's maximum
+    /// value. `options.k` limits the number of results (zero returns no items).
+    /// Set `options.include_tie_breakers` to include all items tied at rank k.
+    /// Returns `(insertion_index, distance)` pairs ordered by increasing distance.
+    /// Items with equal distances may be returned in any order.
+    ///
+    /// Correct ranking and pruning require valid lower bounds. For spherical
+    /// distances, use spherical bounds that account for poles and the antimeridian;
+    /// a planar closest point on a longitude/latitude box is not generally valid.
+    /// Returning zero is always a safe bound for nonnegative distances, but may
+    /// require evaluating every item. Indexed boxes must enclose the full geometry
+    /// under the chosen metric, including any extrema along curved edges.
+    ///
+    /// # Example
+    ///
+    /// Rank externally stored points using Manhattan distance. No feature is required.
+    ///
+    /// ```
+    /// use geo_index::rtree::{NeighborsOptions, RTreeBuilder, RTreeIndex, sort::HilbertSort};
+    ///
+    /// let points = [(3.0_f64, 4.0_f64), (1.0, 2.0), (8.0, 1.0)];
+    /// let mut builder = RTreeBuilder::<f64>::new(points.len() as u32);
+    /// for &(x, y) in &points {
+    ///     builder.add(x, y, x, y);
+    /// }
+    /// let tree = builder.finish::<HilbertSort>();
+    /// let query = (0.0_f64, 0.0_f64);
+    /// let results = tree.neighbors_with_callbacks(
+    ///     NeighborsOptions::k(2),
+    ///     |[min_x, min_y, max_x, max_y]| {
+    ///         (query.0 - query.0.clamp(min_x, max_x)).abs()
+    ///             + (query.1 - query.1.clamp(min_y, max_y)).abs()
+    ///     },
+    ///     |id, _bbox| {
+    ///         let (x, y) = points[id as usize];
+    ///         Some((x - query.0).abs() + (y - query.1).abs())
+    ///     },
+    /// );
+    /// assert_eq!(results, vec![(1, 3.0), (0, 7.0)]);
+    /// ```
+    fn neighbors_with_callbacks<D, B, I>(
+        &self,
+        options: NeighborsOptions<D>,
+        mut bbox_distance: B,
+        mut item_distance: I,
+    ) -> Vec<(u32, D)>
+    where
+        D: IndexableNum,
+        B: FnMut([N; 4]) -> D,
+        I: FnMut(u32, [N; 4]) -> Option<D>,
+    {
         let NeighborsOptions {
             k,
             max_distance,
@@ -315,12 +395,12 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
         }
 
         let indices = self.indices();
-        let max_distance = max_distance.unwrap_or(distance_metric.max_distance());
+        let max_distance = max_distance.unwrap_or(D::max_value());
 
         let mut outer_node_index = boxes.len().checked_sub(4);
         let mut queue = BinaryHeap::new();
-        let mut results: Vec<(u32, N)> = vec![];
-        let mut kth_distance: Option<N> = None;
+        let mut results: Vec<(u32, D)> = vec![];
+        let mut kth_distance: Option<D> = None;
 
         'outer: while let Some(node_index) = outer_node_index {
             // find the end index of the node
@@ -331,15 +411,15 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
             for pos in (node_index..end).step_by(4) {
                 let index = indices.get(pos >> 2);
 
-                // Use the custom distance metric for bbox distance calculation
-                let dist = distance_metric.distance_to_bbox(
-                    x,
-                    y,
-                    boxes[pos],
-                    boxes[pos + 1],
-                    boxes[pos + 2],
-                    boxes[pos + 3],
-                );
+                let bbox = [boxes[pos], boxes[pos + 1], boxes[pos + 2], boxes[pos + 3]];
+                let dist = if node_index >= self.num_items() as usize * 4 {
+                    bbox_distance(bbox)
+                } else {
+                    let Some(dist) = item_distance(index as u32, bbox) else {
+                        continue;
+                    };
+                    dist
+                };
 
                 if dist > max_distance {
                     continue;
@@ -353,7 +433,6 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
                     }));
                 } else {
                     // leaf item (use odd id)
-                    // Use consistent distance calculation for both nodes and leaf items
                     queue.push(Reverse(NeighborNode {
                         id: (index << 1) + 1,
                         dist,
@@ -535,111 +614,33 @@ pub trait RTreeIndex<N: IndexableNum>: Sized {
         distance_metric: &M,
         accessor: &A,
     ) -> Vec<(u32, N)> {
-        let NeighborsOptions {
-            k,
-            max_distance,
-            include_tie_breakers,
-        } = options;
-        if k == Some(0) {
-            return vec![];
-        }
-        let boxes = self.boxes();
-        if boxes.is_empty() {
-            return vec![];
-        }
-
-        let indices = self.indices();
-        let max_distance = max_distance.unwrap_or(distance_metric.max_distance());
-
-        let mut outer_node_index = boxes.len().checked_sub(4);
-        let mut queue = BinaryHeap::new();
-        let mut results: Vec<(u32, N)> = vec![];
-        let mut kth_distance: Option<N> = None;
-
-        'outer: while let Some(node_index) = outer_node_index {
-            // find the end index of the node
-            let end = (node_index + self.node_size() as usize * 4)
-                .min(upper_bound(node_index, self.level_bounds()));
-
-            // add child nodes to the queue
-            for pos in (node_index..end).step_by(4) {
-                let index = indices.get(pos >> 2);
-
-                let dist = if node_index >= self.num_items() as usize * 4 {
-                    // For internal nodes, use geometry-to-bbox distance
-                    distance_metric.distance_geometry_to_bbox(
-                        query_geometry,
-                        boxes[pos],
-                        boxes[pos + 1],
-                        boxes[pos + 2],
-                        boxes[pos + 3],
-                    )
-                } else {
-                    // For leaf items, use geometry-to-geometry distance
-                    if let Some(item_geom) = accessor.get_geometry(index) {
+        self.neighbors_with_callbacks(
+            NeighborsOptions {
+                max_distance: Some(
+                    options
+                        .max_distance
+                        .unwrap_or(distance_metric.max_distance()),
+                ),
+                ..options
+            },
+            |[min_x, min_y, max_x, max_y]| {
+                distance_metric.distance_geometry_to_bbox(
+                    query_geometry,
+                    min_x,
+                    min_y,
+                    max_x,
+                    max_y,
+                )
+            },
+            |index, _bbox| {
+                Some(match accessor.get_geometry(index as usize) {
+                    Some(item_geom) => {
                         distance_metric.distance_to_geometry(query_geometry, item_geom)
-                    } else {
-                        distance_metric.max_distance()
                     }
-                };
-
-                if dist > max_distance {
-                    continue;
-                }
-
-                if node_index >= self.num_items() as usize * 4 {
-                    // node (use even id)
-                    queue.push(Reverse(NeighborNode {
-                        id: index << 1,
-                        dist,
-                    }));
-                } else {
-                    // leaf item (use odd id)
-                    queue.push(Reverse(NeighborNode {
-                        id: (index << 1) + 1,
-                        dist,
-                    }));
-                }
-            }
-
-            // pop items from the queue
-            while !queue.is_empty() && queue.peek().is_some_and(|val| (val.0.id & 1) != 0) {
-                let dist = queue.peek().unwrap().0.dist;
-                if dist > max_distance {
-                    break 'outer;
-                }
-
-                // If we've reached k items and not including tie breakers, check if we should stop
-                if !include_tie_breakers && k.is_some_and(|k_val| results.len() == k_val) {
-                    break 'outer;
-                }
-
-                // If including tie breakers and we're about to add the k-th item, record its distance
-                if include_tie_breakers
-                    && kth_distance.is_none()
-                    && k.is_some_and(|k_val| results.len() + 1 == k_val)
-                {
-                    kth_distance = Some(dist);
-                }
-
-                // If we have recorded k-th distance and current distance exceeds it, stop
-                if include_tie_breakers && kth_distance.is_some_and(|kth| dist > kth) {
-                    break 'outer;
-                }
-
-                let item = queue.pop().unwrap();
-                let item_index: u32 = (item.0.id >> 1).try_into().unwrap();
-                results.push((item_index, item.0.dist));
-            }
-
-            if let Some(item) = queue.pop() {
-                outer_node_index = Some(item.0.id >> 1);
-            } else {
-                outer_node_index = None;
-            }
-        }
-
-        results
+                    None => distance_metric.max_distance(),
+                })
+            },
+        )
     }
 
     /// Returns an iterator over the indexes of objects in this and another tree that intersect.
