@@ -10,7 +10,7 @@
 
 ### Added
 
-- Add `RTreeIndex::neighbors_with_callbacks` for ranked queries with caller-defined item distances and bounding-box lower bounds, without enabling a geometry dependency. The existing `use-geo_0_31` APIs delegate to the callback implementation, including distance results and tie handling.
+- Add `RTreeIndex::neighbors_with_callbacks` for ranked queries with caller-defined item distances and bounding-box lower bounds, without enabling a geometry dependency. The existing `use-geo_0_31` APIs delegate to the callback implementation, including distance results and tie handling by @paleolimbot in https://github.com/georust/geo-index/pull/161
 
 ## [0.3.4] - 2026-02-27
 
