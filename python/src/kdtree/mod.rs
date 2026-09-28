@@ -1,6 +1,7 @@
 mod builder;
 mod input;
 mod metadata;
+mod query;
 mod range;
 mod within;
 
@@ -23,6 +24,7 @@ pub fn register_kdtree_module(
     child_module.add_class::<metadata::PyKDTreeMetadata>()?;
     child_module.add_wrapped(wrap_pyfunction!(range::range))?;
     child_module.add_wrapped(wrap_pyfunction!(within::within))?;
+    child_module.add_wrapped(wrap_pyfunction!(query::query))?;
 
     parent_module.add_submodule(&child_module)?;
 
