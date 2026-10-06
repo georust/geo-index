@@ -9,7 +9,7 @@ use rstar::AABB;
 use std::fs::read;
 
 fn load_data() -> Vec<f64> {
-    let buf = read("benches/bounds.raw").unwrap();
+    let buf = read("benches/bench_data/bounds.raw").unwrap();
     cast_slice(&buf).to_vec()
 }
 
